@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Royal Memory: Ultimate Edition</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #050505; font-family: 'serif'; }
+        canvas { display: block; touch-action: none; }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+/**
+ * ROYAL MEMORY: LEGEND OF 9 (ULTIMATE EDITION)
+ * 專業音樂合成、全平台自適應佈局、多人回合制
+ */
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// --- 1. 遊戲狀態與配置 ---
+const STATE = { INIT: 0, LOBBY: 1, SETTINGS: 2, CHAR_SELECT: 3, PLAYING: 4, ROUND_END: 5, GAME_OVER: 6 };
+const CHARS = [
+    { name: "亞瑟國王", icon: "👑", color: "#FFD700", gender: "M" },
+    { name: "伊莎皇后", icon: "👸", color: "#FF69B4", gender: "F" },
+    { name: "蘭斯騎士", icon: "🛡️", color: "#1E90FF", gender: "M" },
+    { name: "葛溫公主", icon: "✨", color: "#DA70D6", gender: "F" },
+    { name: "路易親王", icon: "🦅", color: "#708090", gender: "M" },
+    { name: "艾琳女爵", icon: "🌿", color: "#32CD32", gender: "F" },
+    { name: "凱恩大公", icon: "⚒️", color: "#A0522D", gender: "M" },
+    { name: "索菲賢者", icon: "📜", color: "#FFA500", gender: "F" }
+];
+
+// --- 2. 全域變數 ---
+let currentState = STATE.INIT;
+let gameMode = 'SINGLE'; 
+let totalPlayers = 1;
+let players = [];
+let currentPlayerIdx = 0;
+let currentRound = 1;
+const MAX_ROUNDS = 4;
+
+let settings = { previewMode: true }; // true: 1s preview, false: blind
+let cards = [];
+let nextTarget = 1;
+let gameTimer = 0, steps = 0;
+let lockInput = false, shake = 0, particles = [];
+let selectedCharIndices = [];
+let buttons = [];
+
+// --- 3. 音樂合成器引擎 (Professional Procedural Audio) ---
+let audioCtx, masterGain, musicNode;
+const NOTES = { D3: 146.83, E3: 164.81, F3: 174.61, G3: 196.00, A3: 220.00, C4: 261.63, D4: 293.66 };
+
+function initAudio() {
+    if (audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.15;
+    masterGain.connect(audioCtx.destination);
+    playMusic('LOBBY');
+}
+
+function playMusic(type) {
+    if (musicNode) musicNode.stop();
+    musicNode = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    musicNode.type = 'triangle';
+    
+    // 簡單的循環旋律線
+    const melody = type === 'LOBBY' ? [146.83, 174.61, 220.00, 196.00] : [146.83, 164.81, 146.83, 110.00];
+    let now = audioCtx.currentTime;
+    melody.forEach((f, i) => {
+        musicNode.frequency.setValueAtTime(f, now + i * 0.8);
+    });
+
+    g.gain.value = 0.05;
+    musicNode.connect(g); g.connect(masterGain);
+    musicNode.loop = true;
+    musicNode.start();
+}
+
+function playSFX(type) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    osc.connect(g); g.connect(masterGain);
+    
+    if (type === 'click') {
+        osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+        g.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+    } else if (type === 'wrong') {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(120, audioCtx.currentTime);
+        osc.frequency.linearRampToValueAtTime(60, audioCtx.currentTime + 0.3);
+        g.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+    } else if (type === 'win') {
+        osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.2);
+        g.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+    }
+}
+
+// --- 4. 響應式佈局系統 ---
+let vw, vh, isLandscape;
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    vw = canvas.width;
+    vh = canvas.height;
+    isLandscape = vw > vh;
+    updateUI();
+}
+
+function updateUI() {
+    buttons = [];
+    const midX = vw / 2;
+    const midY = vh / 2;
+
+    if (currentState === STATE.LOBBY) {
+        addButton(midX - 125, midY, 250, 60, "進入聖域", () => { currentState = STATE.SETTINGS; updateUI(); });
+    } else if (currentState === STATE.SETTINGS) {
+        addButton(midX - 125, midY - 80, 250, 60, settings.previewMode ? "模式：啟示 (1s)" : "模式：盲目 (0s)", () => {
+            settings.previewMode = !settings.previewMode; updateUI();
+        });
+        addButton(midX - 125, midY + 20, 250, 60, "單人挑戰", () => { gameMode='SINGLE'; totalPlayers=1; currentState=STATE.CHAR_SELECT; selectedCharIndices=[]; updateUI(); });
+        addButton(midX - 125, midY + 100, 250, 60, "多人遠征", () => { currentState=STATE.CHAR_SELECT; totalPlayers=2; updateUI(); });
+    } else if (currentState === STATE.CHAR_SELECT) {
+        // 多人選擇人數按鈕 (如果尚未決定人數)
+        if (totalPlayers >= 2 && selectedCharIndices.length === 0) {
+            [2, 3, 4].forEach((n, i) => addButton(midX - 160 + i * 110, 150, 90, 50, n+"人", () => { totalPlayers=n; updateUI(); }));
+        }
+        if (selectedCharIndices.length === totalPlayers) {
+            addButton(midX - 100, vh - 100, 200, 60, "確定出發", startGame);
+        }
+    } else if (currentState === STATE.GAME_OVER) {
+        addButton(midX - 100, vh - 100, 200, 60, "回大廳", () => { currentState = STATE.LOBBY; updateUI(); });
+    }
+}
+
+function addButton(x, y, w, h, text, cb) {
+    buttons.push({ x, y, w, h, text, cb });
+}
+
+// --- 5. 遊戲核心邏輯 ---
+function startGame() {
+    players = selectedCharIndices.map(idx => ({ charIdx: idx, score: 0, steps: 0, name: CHARS[idx].name }));
+    currentPlayerIdx = 0;
+    currentRound = 1;
+    initRound();
+    playMusic('GAME');
+}
+
+function initRound() {
+    currentState = STATE.PLAYING;
+    nextTarget = 1;
+    gameTimer = 0; steps = 0;
+    lockInput = false;
+
+    // 九宮格佈局計算
+    const gridDim = Math.min(vw, vh) * 0.7;
+    const size = gridDim / 3.5;
+    const gap = gridDim * 0.05;
+    const startX = vw / 2 - (size * 1.5 + gap);
+    const startY = vh / 2 - (size * 1.5 + gap) + 40;
+
+    let nums = [1,2,3,4,5,6,7,8,9].sort(() => Math.random() - 0.5);
+    cards = nums.map((n, i) => ({
+        id: n,
+        x: startX + (i % 3) * (size + gap),
+        y: startY + Math.floor(i / 3) * (size + gap),
+        w: size, h: size,
+        isFlipped: settings.previewMode,
+        isSolved: false
+    }));
+
+    if (settings.previewMode) {
+        setTimeout(() => {
+            if (currentState === STATE.PLAYING) cards.forEach(c => c.isFlipped = false);
+        }, 1000);
+    }
+}
+
+function handleInput(clientX, clientY) {
+    if (currentState === STATE.INIT) {
+        initAudio(); currentState = STATE.LOBBY; updateUI(); return;
+    }
+
+    buttons.forEach(btn => {
+        if (clientX > btn.x && clientX < btn.x + btn.w && clientY > btn.y && clientY < btn.y + btn.h) {
+            playSFX('click'); btn.cb(); return;
+        }
+    });
+
+    if (currentState === STATE.CHAR_SELECT) {
+        const itemW = 100, itemH = 140, startX = vw/2 - 220, startY = 250;
+        CHARS.forEach((c, i) => {
+            const bx = startX + (i % 4) * 110;
+            const by = startY + Math.floor(i / 4) * 160;
+            if (clientX > bx && clientX < bx + itemW && clientY > by && clientY < by + itemH) {
+                const idx = selectedCharIndices.indexOf(i);
+                if (idx > -1) selectedCharIndices.splice(idx, 1);
+                else if (selectedCharIndices.length < totalPlayers) selectedCharIndices.push(i);
+                playSFX('click'); updateUI();
+            }
+        });
+    }
+
+    if (currentState === STATE.PLAYING && !lockInput) {
+        cards.forEach(c => {
+            if (!c.isFlipped && clientX > c.x && clientX < c.x + c.w && clientY > c.y && clientY < c.y + c.h) {
+                flipCard(c);
+            }
+        });
+    }
+}
+
+function flipCard(card) {
+    card.isFlipped = true;
+    steps++;
+    if (card.id === nextTarget) {
+        card.isSolved = true;
+        nextTarget++;
+        playSFX('win');
+        spawnParticles(card.x + card.w/2, card.y + card.h/2, "#FFD700");
+        if (nextTarget > 9) {
+            lockInput = true;
+            setTimeout(nextRound, 1000);
+        }
+    } else {
+        lockInput = true;
+        shake = 15;
+        playSFX('wrong');
+        spawnParticles(card.x + card.w/2, card.y + card.h/2, "#FF0000");
+        setTimeout(() => {
+            cards.forEach(c => { c.isFlipped = false; c.isSolved = false; });
+            nextTarget = 1;
+            lockInput = false;
+            if (totalPlayers > 1) {
+                currentPlayerIdx = (currentPlayerIdx + 1) % totalPlayers;
+                initRound();
+            }
+        }, 1000);
+    }
+}
+
+function nextRound() {
+    const p = players[currentPlayerIdx];
+    p.score += Math.max(10, 500 - Math.floor(gameTimer) - steps);
+    if (currentRound < MAX_ROUNDS) {
+        currentRound++;
+        initRound();
+    } else {
+        currentState = STATE.GAME_OVER;
+        playMusic('LOBBY');
+        updateUI();
+    }
+}
+
+// --- 6. 渲染引擎 ---
+function mainLoop() {
+    ctx.fillStyle = "#050505";
+    ctx.fillRect(0, 0, vw, vh);
+
+    if (shake > 0) {
+        ctx.save();
+        ctx.translate(Math.random()*shake - shake/2, Math.random()*shake - shake/2);
+        shake *= 0.9;
+    }
+
+    switch (currentState) {
+        case STATE.INIT: drawInit(); break;
+        case STATE.LOBBY: drawLobby(); break;
+        case STATE.SETTINGS: drawSettings(); break;
+        case STATE.CHAR_SELECT: drawCharSelect(); break;
+        case STATE.PLAYING: drawGame(); break;
+        case STATE.GAME_OVER: drawGameOver(); break;
+    }
+
+    drawUIElements();
+    if (shake > 0) ctx.restore();
+
+    if (currentState === STATE.PLAYING && !lockInput) gameTimer += 1/60;
+    requestAnimationFrame(mainLoop);
+}
+
+function drawInit() {
+    drawText("ROYAL MEMORY", vw/2, vh/2 - 40, 80, "#FFD700", true);
+    drawText("觸碰螢幕開始儀式", vw/2, vh/2 + 60, 25, "#FFF");
+}
+
+function drawLobby() {
+    drawText("皇家記憶：九宮試煉", vw/2, vh/2 - 120, 60, "#FFD700", true);
+}
+
+function drawSettings() {
+    drawText("試煉設定", vw/2, vh/2 - 150, 50, "#FFD700");
+}
+
+function drawCharSelect() {
+    drawText("挑選成員 (" + selectedCharIndices.length + "/" + totalPlayers + ")", vw/2, 80, 40, "#FFD700");
+    const itemW = 100, itemH = 140, startX = vw/2 - 220, startY = 250;
+    CHARS.forEach((c, i) => {
+        const bx = startX + (i % 4) * 110;
+        const by = startY + Math.floor(i / 4) * 160;
+        const isSel = selectedCharIndices.includes(i);
+        ctx.fillStyle = isSel ? c.color : "#1a1a1a";
+        ctx.shadowBlur = isSel ? 20 : 0; ctx.shadowColor = c.color;
+        roundRect(bx, by, itemW, itemH, 15, true, true);
+        ctx.shadowBlur = 0;
+        drawText(c.icon, bx + 50, by + 60, 50, "#FFF");
+        drawText(c.name, bx + 50, by + 110, 16, isSel ? "#000" : "#FFF");
+    });
+}
+
+function drawGame() {
+    const p = players[currentPlayerIdx];
+    const char = CHARS[p.charIdx];
+    
+    // UI Bar
+    ctx.fillStyle = "rgba(20,20,20,0.8)";
+    ctx.fillRect(0, 0, vw, 110);
+    drawText(`${char.icon} ${char.name}`, isLandscape ? 150 : vw/2, 45, 25, char.color);
+    drawText(`回合 ${currentRound}/${MAX_ROUNDS}`, vw/2, 85, 20, "#FFD700");
+    drawText(`時間 ${gameTimer.toFixed(1)}s`, vw - 120, 45, 20, "#FFF");
+    drawText(`步數 ${steps}`, vw - 120, 85, 20, "#FFF");
+
+    // Cards
+    cards.forEach(c => {
+        ctx.fillStyle = c.isFlipped ? "#FFF" : "#2c3e50";
+        if (c.isSolved) ctx.fillStyle = "#FFD700";
+        roundRect(c.x, c.y, c.w, c.h, 15, true, true);
+        if (c.isFlipped) {
+            drawText(c.id, c.x + c.w/2, c.y + c.h/2 + 15, 45, "#000");
+        } else {
+            ctx.strokeStyle = "rgba(255,215,0,0.2)";
+            ctx.strokeRect(c.x + 10, c.y + 10, c.w - 20, c.h - 20);
+        }
+    });
+}
+
+function drawGameOver() {
+    drawText("大賽落幕", vw/2, 100, 60, "#FFD700", true);
+    players.sort((a,b) => b.score - a.score).forEach((p, i) => {
+        const c = CHARS[p.charIdx];
+        drawText(`${i+1}. ${c.icon} ${p.name} - 積分: ${Math.floor(p.score)}`, vw/2, 250 + i * 80, 30, c.color);
+    });
+}
+
+// --- 輔助函式 ---
+function drawText(txt, x, y, size, color, glow = false) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = color;
+    if (glow) { ctx.shadowBlur = 15; ctx.shadowColor = color; }
+    ctx.font = `bold ${size}px serif`;
+    ctx.fillText(txt, x, y);
+    ctx.shadowBlur = 0;
+}
+
+function drawUIElements() {
+    buttons.forEach(btn => {
+        ctx.fillStyle = "#5d2e0c"; ctx.strokeStyle = "#daa520"; ctx.lineWidth = 3;
+        roundRect(btn.x, btn.y, btn.w, btn.h, 10, true, true);
+        drawText(btn.text, btn.x + btn.w/2, btn.y + btn.h/2 + 8, 22, "#FFF");
+    });
+    
+    particles.forEach((p, i) => {
+        p.x += p.vx; p.y += p.vy; p.life -= 0.02;
+        ctx.globalAlpha = p.life; ctx.fillStyle = p.color;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI*2); ctx.fill();
+        if (p.life <= 0) particles.splice(i, 1);
+    });
+    ctx.globalAlpha = 1;
+}
+
+function roundRect(x, y, w, h, r, fill, stroke) {
+    ctx.beginPath(); ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+    ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h); ctx.lineTo(x+r, y+h);
+    ctx.quadraticCurveTo(x, y+h, x, y+h-r); ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y); ctx.closePath();
+    if (fill) ctx.fill(); if (stroke) ctx.stroke();
+}
+
+function spawnParticles(x, y, color) {
+    for(let i=0; i<15; i++) particles.push({ x, y, color, vx: Math.random()*10-5, vy: Math.random()*10-5, life: 1 });
+}
+
+window.addEventListener('resize', resize);
+canvas.addEventListener('mousedown', e => handleInput(e.clientX, e.clientY));
+canvas.addEventListener('touchstart', e => { e.preventDefault(); handleInput(e.touches[0].clientX, e.touches[0].clientY); });
+
+resize();
+requestAnimationFrame(mainLoop);
+
+</script>
+</body>
+</html>
