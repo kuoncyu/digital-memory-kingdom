@@ -3,9 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Royal Memory: Alchemical Trials</title>
+    <title>Royal Memory: Ultimate Master</title>
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #050505; font-family: 'serif'; user-select: none; }
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Noto+Serif+TC:wght@400;700&display=swap');
+        body, html { 
+            margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; 
+            background-color: #020205; font-family: 'Cinzel', 'Noto Serif TC', serif; 
+            user-select: none; -webkit-user-select: none;
+        }
         canvas { display: block; touch-action: none; }
     </style>
 </head>
@@ -14,407 +19,598 @@
 
 <script>
 /**
- * ROYAL MEMORY: ALCHEMICAL TRIALS (ADVANCED VERSION)
- * 基於上傳架構優化：包含音樂合成、角色系統、多人模式、螢幕震動與粒子系統
+ * ROYAL MEMORY: ULTIMATE MASTER EDITION
+ * 更新亮點：空靈水晶音效引擎 (Ethereal Ambient Audio Engine)、精準排版、設定總機
  */
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-// --- 1. 遊戲狀態與配置 ---
-const STATE = { INIT: 0, LOBBY: 1, SETTINGS: 2, CHAR_SELECT: 3, PLAYING: 4, GAME_OVER: 6 };
+const STATE = { INIT: 0, LOBBY: 1, SETTINGS: 2, CHAR_SELECT: 3, PLAYING: 4, GAME_OVER: 5, ENTER_NAME: 6, LEADERBOARD: 7 };
 const CHARS = [
-    { name: "亞瑟國王", icon: "👑", color: "#FFD700" },
-    { name: "伊莎皇后", icon: "👸", color: "#FF69B4" },
-    { name: "蘭斯騎士", icon: "🛡️", color: "#1E90FF" },
-    { name: "葛溫公主", icon: "✨", color: "#DA70D6" },
-    { name: "路易親王", icon: "🦅", color: "#708090" },
-    { name: "艾琳女爵", icon: "🌿", color: "#32CD32" },
-    { name: "凱恩大公", icon: "⚒️", color: "#A0522D" },
-    { name: "索菲賢者", icon: "📜", color: "#FFA500" }
+    { name: "亞瑟國王", icon: "👑", color: "#FFD700" }, { name: "伊莎皇后", icon: "👸", color: "#FF69B4" },
+    { name: "蘭斯騎士", icon: "🛡️", color: "#4facfe" }, { name: "葛溫公主", icon: "✨", color: "#ee9ca7" },
+    { name: "路易親王", icon: "🦅", color: "#bdc3c7" }, { name: "艾琳女爵", icon: "🌿", color: "#00b09b" },
+    { name: "凱恩大公", icon: "⚒️", color: "#8e44ad" }, { name: "索菲賢者", icon: "📜", color: "#f39c12" }
 ];
+const MODES = ["經典計分", "5分計時生存", "5題競速賽"];
 
-const LANG = {
-    title: "皇家記憶：九宮試煉",
-    start: "進入聖域",
-    settings: "試煉設定",
-    charSelect: "挑選試煉成員",
-    back: "返回大廳",
-    single: "單人挑戰",
-    multi: "多人遠征",
-    restart: "重新啟動儀式",
-    lobby: "回大廳",
-    confirm: "確定出發"
+let state = STATE.INIT;
+let vw = window.innerWidth, vh = window.innerHeight;
+let buttons = [], particles = [], cards = [];
+let shake = 0, lockInput = false;
+
+// 遊戲狀態與設定 (預設音量調降至更舒適的範圍)
+let settings = { 
+    volM: 0.25, volS: 0.5, isDragM: false, isDragS: false,
+    hintTime: 1, shuffleOnFail: false, rounds: 3, modeIdx: 0 
 };
+let players = [], currentPlayerIdx = 0, currentRound = 1;
+let nextTarget = 1, timer = 0, steps = 0, totalBoardsCleared = 0;
+let leaderboard = [];
+let inputName = "";
 
-// --- 2. 全域變數 ---
-let currentState = STATE.INIT;
-let gameMode = 'SINGLE'; 
-let totalPlayers = 1;
-let players = [];
-let currentPlayerIdx = 0;
-let currentRound = 1;
-const MAX_ROUNDS = 3;
-
-let settings = { previewMode: true, volume: 0.15 };
-let cards = [];
-let nextTarget = 1;
-let gameTimer = 0, steps = 0;
-let lockInput = false, shake = 0, particles = [];
-let selectedCharIndices = [];
-let buttons = [];
-
-// --- 3. 音樂合成器引擎 ---
-let audioCtx, masterGain, musicNode;
+// --- 空靈水晶音效引擎 (Ethereal Ambient Audio Engine) ---
+let audioCtx, musicGain, sfxGain;
+let bgmNodes = [];
+let bgmInterval = null;
+let currentMusicType = '';
 
 function initAudio() {
     if (audioCtx) return;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    masterGain = audioCtx.createGain();
-    masterGain.gain.value = settings.volume;
-    masterGain.connect(audioCtx.destination);
+    musicGain = audioCtx.createGain(); sfxGain = audioCtx.createGain();
+    musicGain.gain.value = settings.volM; sfxGain.gain.value = settings.volS;
+    musicGain.connect(audioCtx.destination); sfxGain.connect(audioCtx.destination);
     playMusic('LOBBY');
 }
 
-function playMusic(type) {
-    if (!audioCtx) return;
-    if (musicNode) { musicNode.stop(); musicNode.disconnect(); }
-    
-    musicNode = audioCtx.createOscillator();
-    const g = audioCtx.createGain();
-    musicNode.type = type === 'LOBBY' ? 'triangle' : 'sine';
-    
-    const melody = type === 'LOBBY' ? [146.83, 174.61, 220.00, 196.00] : [196.00, 220.00, 261.63, 220.00];
-    let now = audioCtx.currentTime;
-    melody.forEach((f, i) => {
-        musicNode.frequency.setValueAtTime(f, now + i * 0.8);
-    });
+function updateAudioVols() {
+    if (musicGain) musicGain.gain.setTargetAtTime(settings.volM, audioCtx.currentTime, 0.1);
+    if (sfxGain) sfxGain.gain.setTargetAtTime(settings.volS, audioCtx.currentTime, 0.1);
+}
 
-    g.gain.value = 0.05;
-    musicNode.connect(g); g.connect(masterGain);
-    musicNode.loop = true;
-    musicNode.start();
+function stopMusic() {
+    if (bgmInterval) clearInterval(bgmInterval);
+    const now = audioCtx ? audioCtx.currentTime : 0;
+    bgmNodes.forEach(node => {
+        try {
+            node.gain.gain.cancelScheduledValues(now);
+            node.gain.gain.linearRampToValueAtTime(0, now + 1);
+            node.osc.stop(now + 1.1);
+            if (node.lfo) node.lfo.stop(now + 1.1);
+        } catch(e) {}
+    });
+    bgmNodes = [];
+    currentMusicType = '';
+}
+
+function playMusic(type) {
+    if (!audioCtx || currentMusicType === type) return;
+    stopMusic();
+    currentMusicType = type;
+    const now = audioCtx.currentTime;
+
+    if (type === 'LOBBY') {
+        // 聖域大廳：空靈的 C Major 9 和弦 (C3, G3, B3, D4, E4)
+        const freqs = [130.81, 196.00, 246.94, 293.66, 329.63]; 
+        freqs.forEach((f, i) => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            const lfo = audioCtx.createOscillator();
+            const lfoGain = audioCtx.createGain();
+            
+            osc.type = i % 2 === 0 ? 'sine' : 'triangle'; // 柔和的波形
+            osc.frequency.value = f + (Math.random()*0.6 - 0.3); // 微弱失調產生空間感
+            
+            // LFO 製造呼吸感
+            lfo.type = 'sine'; lfo.frequency.value = 0.05 + i * 0.01; 
+            lfoGain.gain.value = 0.04;
+            lfo.connect(lfoGain); lfoGain.connect(gain.gain);
+            lfo.start(now);
+            
+            // 緩慢淡入
+            gain.gain.setValueAtTime(0, now);
+            gain.gain.linearRampToValueAtTime(0.06, now + 3);
+            
+            osc.connect(gain); gain.connect(musicGain);
+            osc.start(now);
+            
+            bgmNodes.push({ osc: osc, gain: gain, lfo: lfo });
+        });
+    } else if (type === 'GAME') {
+        // 專注試煉：沉穩心跳 + 隨機五聲音階水晶撥弦 (C Major Pentatonic)
+        const scale = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25]; 
+        
+        bgmInterval = setInterval(() => {
+            if(!audioCtx || state !== STATE.PLAYING) return;
+            const t = audioCtx.currentTime;
+            
+            // 沉穩心跳鼓 (Kick) - 每秒一次
+            const kick = audioCtx.createOscillator();
+            const kickGain = audioCtx.createGain();
+            kick.type = 'sine';
+            kick.frequency.setValueAtTime(80, t);
+            kick.frequency.exponentialRampToValueAtTime(20, t + 0.4);
+            kickGain.gain.setValueAtTime(0.3, t);
+            kickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+            kick.connect(kickGain); kickGain.connect(musicGain);
+            kick.start(t); kick.stop(t + 0.5);
+
+            // 隨機水晶撥弦
+            if (Math.random() > 0.4) {
+                const pluck = audioCtx.createOscillator();
+                const pluckGain = audioCtx.createGain();
+                pluck.type = 'sine';
+                pluck.frequency.value = scale[Math.floor(Math.random() * scale.length)];
+                
+                pluckGain.gain.setValueAtTime(0, t);
+                pluckGain.gain.linearRampToValueAtTime(0.15, t + 0.02); // 快速敲擊
+                pluckGain.gain.exponentialRampToValueAtTime(0.001, t + 2.0); // 悠長餘音
+                
+                pluck.connect(pluckGain); pluckGain.connect(musicGain);
+                pluck.start(t); pluck.stop(t + 2.1);
+            }
+        }, 1000); // 60 BPM
+    }
 }
 
 function playSFX(type) {
     if (!audioCtx) return;
-    const osc = audioCtx.createOscillator();
+    const now = audioCtx.currentTime;
     const g = audioCtx.createGain();
-    osc.connect(g); g.connect(masterGain);
-    
-    if (type === 'click') {
-        osc.frequency.setValueAtTime(800, audioCtx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
-        g.gain.setValueAtTime(0.3, audioCtx.currentTime);
-        osc.start(); osc.stop(audioCtx.currentTime + 0.1);
-    } else if (type === 'wrong') {
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
-        osc.frequency.linearRampToValueAtTime(50, audioCtx.currentTime + 0.3);
-        g.gain.setValueAtTime(0.2, audioCtx.currentTime);
-        osc.start(); osc.stop(audioCtx.currentTime + 0.3);
-    } else if (type === 'win') {
-        osc.frequency.setValueAtTime(523.25, audioCtx.currentTime);
-        osc.frequency.exponentialRampToValueAtTime(1046.5, audioCtx.currentTime + 0.2);
-        g.gain.setValueAtTime(0.2, audioCtx.currentTime);
-        osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+    const osc = audioCtx.createOscillator();
+    osc.connect(g); g.connect(sfxGain);
+
+    if (type === 'CLICK') {
+        // 柔和水滴聲
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(300, now + 0.1);
+        g.gain.setValueAtTime(0.3, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+        osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'CORRECT') {
+        // 清脆水晶鐘聲 (音階遞增)
+        osc.type = 'sine';
+        const note = 523.25 * Math.pow(1.059, nextTarget * 2); 
+        osc.frequency.setValueAtTime(note, now);
+        g.gain.setValueAtTime(0, now);
+        g.gain.linearRampToValueAtTime(0.3, now + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+        osc.start(now); osc.stop(now + 0.6);
+    } else if (type === 'WRONG') {
+        // 柔和低沉的錯誤音效 (取代原本刺耳的鋸齒波)
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(200, now);
+        osc.frequency.linearRampToValueAtTime(80, now + 0.3);
+        g.gain.setValueAtTime(0.4, now); g.gain.linearRampToValueAtTime(0.001, now + 0.3);
+        osc.start(now); osc.stop(now + 0.3);
     }
 }
 
-// --- 4. 佈局與 UI 系統 ---
-let vw, vh;
+// --- 核心佈局與 UI ---
 function resize() {
-    vw = canvas.width = window.innerWidth;
-    vh = canvas.height = window.innerHeight;
+    vw = canvas.width = window.innerWidth; vh = canvas.height = window.innerHeight;
     updateUI();
 }
 
 function updateUI() {
     buttons = [];
-    const midX = vw / 2;
-    const midY = vh / 2;
+    const cx = vw / 2, cy = vh / 2;
+    const isMobile = vw < 800;
 
-    if (currentState === STATE.LOBBY) {
-        addButton(midX - 125, midY, 250, 60, LANG.start, () => { currentState = STATE.SETTINGS; updateUI(); });
-    } else if (currentState === STATE.SETTINGS) {
-        addButton(midX - 125, midY - 80, 250, 60, settings.previewMode ? "啟示模式 (1s)" : "盲目模式 (0s)", () => {
-            settings.previewMode = !settings.previewMode; updateUI();
-        });
-        addButton(midX - 125, midY + 20, 250, 60, LANG.single, () => { 
-            gameMode='SINGLE'; totalPlayers=1; currentState=STATE.CHAR_SELECT; selectedCharIndices=[]; updateUI(); 
-        });
-        addButton(midX - 125, midY + 100, 250, 60, LANG.multi, () => { 
-            gameMode='MULTI'; currentState=STATE.CHAR_SELECT; selectedCharIndices=[]; updateUI(); 
-        });
-    } else if (currentState === STATE.CHAR_SELECT) {
-        if (gameMode === 'MULTI' && selectedCharIndices.length === 0) {
-            [2, 3, 4].forEach((n, i) => addButton(midX - 160 + i * 110, 160, 90, 50, n+"人", () => { totalPlayers=n; updateUI(); }));
+    if (state === STATE.LOBBY) {
+        addButton(cx - 120, cy + 20, 240, 60, "啟動大師試煉", () => { state = STATE.CHAR_SELECT; players=[]; updateUI(); playSFX('CLICK'); });
+        addButton(cx - 120, cy + 100, 240, 50, "試煉設定", () => { state = STATE.SETTINGS; updateUI(); playSFX('CLICK'); });
+        addButton(cx - 120, cy + 170, 240, 50, "英雄榜", () => { state = STATE.LEADERBOARD; updateUI(); playSFX('CLICK'); });
+    } 
+    else if (state === STATE.SETTINGS) {
+        const sw = isMobile ? vw * 0.8 : 350, gap = 20;
+        const startX1 = isMobile ? cx - sw/2 : cx - sw - gap;
+        const startX2 = isMobile ? cx - sw/2 : cx + gap;
+        const sy = 120;
+
+        addButton(startX1, sy, sw, 30, "音樂音量", null, 'sliderM');
+        addButton(startX1, sy + 70, sw, 30, "音效音量", null, 'sliderS');
+        addButton(startX1, sy + 140, sw, 50, "全螢幕模式", toggleFS);
+        addButton(startX1, sy + 210, sw, 50, `提示時間: ${settings.hintTime} 秒`, () => { settings.hintTime = (settings.hintTime + 1) % 3; updateUI(); playSFX('CLICK'); });
+
+        const sy2 = isMobile ? sy + 280 : sy, col2X = isMobile ? startX1 : startX2;
+        addButton(col2X, sy2, sw, 50, `失敗重新洗牌: ${settings.shuffleOnFail ? '開啟' : '關閉'}`, () => { settings.shuffleOnFail = !settings.shuffleOnFail; updateUI(); playSFX('CLICK'); });
+        addButton(col2X, sy2 + 70, sw, 50, `模式: ${MODES[settings.modeIdx]}`, () => { settings.modeIdx = (settings.modeIdx + 1) % 3; updateUI(); playSFX('CLICK'); });
+        
+        if (settings.modeIdx !== 1) { 
+            let rText = settings.modeIdx === 2 ? `固定題數: 5 題` : `比賽回合數: ${settings.rounds}`;
+            addButton(col2X, sy2 + 140, sw, 50, rText, () => { 
+                if(settings.modeIdx === 0) settings.rounds = settings.rounds >= 8 ? 1 : settings.rounds + 1; 
+                updateUI(); playSFX('CLICK'); 
+            });
         }
-        if (selectedCharIndices.length === totalPlayers) {
-            addButton(midX - 100, vh - 100, 200, 60, LANG.confirm, startGame);
+        addButton(cx - 100, vh - 100, 200, 50, "⬅ 返回大廳", () => { state = STATE.LOBBY; updateUI(); playSFX('CLICK'); });
+    }
+    else if (state === STATE.CHAR_SELECT) {
+        addButton(20, 20, 100, 45, "⬅ 返回", () => { state = STATE.LOBBY; updateUI(); playSFX('CLICK'); });
+        if (players.length > 0) {
+            addButton(cx - 120, vh - 90, 240, 60, "進入聖域", startGame);
         }
-        addButton(20, 20, 120, 40, "← " + LANG.back, () => { currentState = STATE.LOBBY; updateUI(); });
-    } else if (currentState === STATE.GAME_OVER) {
-        addButton(midX - 100, vh - 80, 200, 60, LANG.lobby, () => { currentState = STATE.LOBBY; updateUI(); });
+    } 
+    else if (state === STATE.PLAYING) {
+        recalcCards();
+        addButton(vw - 100, vh - 60, 80, 40, "放棄", () => { state = STATE.GAME_OVER; playSFX('CLICK'); updateUI(); });
+    }
+    else if (state === STATE.GAME_OVER) {
+        addButton(cx - 120, vh - 150, 240, 60, "刻下尊名", () => { state = STATE.ENTER_NAME; inputName = ""; playSFX('CLICK'); updateUI(); });
+    }
+    else if (state === STATE.ENTER_NAME) { buildKeyboard(); }
+    else if (state === STATE.LEADERBOARD) {
+        addButton(cx - 100, vh - 100, 200, 50, "⬅ 返回大廳", () => { state = STATE.LOBBY; updateUI(); playSFX('CLICK'); });
     }
 }
 
-function addButton(x, y, w, h, text, cb) {
-    buttons.push({ x, y, w, h, text, cb });
+function buildKeyboard() {
+    const keys = [['Q','W','E','R','T','Y','U','I','O','P'], ['A','S','D','F','G','H','J','K','L'], ['Z','X','C','V','B','N','M','DEL','ENTER']];
+    const kw = Math.min(vw * 0.08, 60), kh = 50, gap = 8, sy = vh - 220;
+    
+    keys.forEach((row, rIdx) => {
+        const rowW = row.length * kw + (row.length - 1) * gap;
+        const sx = vw/2 - rowW/2;
+        row.forEach((k, cIdx) => {
+            let bw = kw; if (k === 'DEL' || k === 'ENTER') bw = kw * 1.5;
+            let accX = sx; for(let i=0; i<cIdx; i++) accX += (row[i]==='DEL'||row[i]==='ENTER' ? kw*1.5 : kw) + gap;
+            addButton(accX, sy + rIdx * (kh + gap), bw, kh, k, () => handleKey(k), 'key');
+        });
+    });
 }
 
-// --- 5. 遊戲核心邏輯 ---
+function handleKey(k) {
+    playSFX('CLICK');
+    if (k === 'DEL') inputName = inputName.slice(0, -1);
+    else if (k === 'ENTER') {
+        if (inputName.trim() === "") inputName = "ANONYMOUS";
+        saveScore();
+    }
+    else if (inputName.length < 10) inputName += k;
+}
+
+function saveScore() {
+    let finalScore = 0; const p = players[0]; 
+    if (settings.modeIdx === 0) finalScore = Math.floor(p.score);
+    else if (settings.modeIdx === 1) finalScore = totalBoardsCleared * 1000;
+    else finalScore = p.score;
+
+    leaderboard.push({ name: inputName, score: finalScore, mode: MODES[settings.modeIdx], icon: CHARS[p.charIdx].icon });
+    leaderboard.sort((a, b) => a.mode === MODES[2] ? a.score - b.score : b.score - a.score);
+    if (leaderboard.length > 10) leaderboard.length = 10; 
+    
+    playMusic('LOBBY'); state = STATE.LEADERBOARD; updateUI();
+}
+
+function addButton(x, y, w, h, txt, cb, type = 'btn') { buttons.push({ x, y, w, h, txt, cb, type }); }
+function toggleFS() {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+    playSFX('CLICK');
+}
+
+// --- 遊戲邏輯 ---
 function startGame() {
-    players = selectedCharIndices.map(idx => ({ charIdx: idx, score: 0, steps: 0, name: CHARS[idx].name }));
-    currentPlayerIdx = 0;
-    currentRound = 1;
-    initRound();
-    playMusic('GAME');
+    playSFX('CLICK');
+    currentPlayerIdx = 0; currentRound = 1; totalBoardsCleared = 0;
+    players.forEach(p => { p.score = 0; p.timeUsed = 0; });
+    if (settings.modeIdx === 1) timer = 300; else timer = 0; 
+    playMusic('GAME'); initRound();
 }
 
 function initRound() {
-    currentState = STATE.PLAYING;
-    nextTarget = 1;
-    gameTimer = 0; steps = 0;
-    lockInput = false;
-
-    const gridDim = Math.min(vw, vh) * 0.7;
-    const size = gridDim / 3.5;
-    const gap = gridDim * 0.05;
-    const startX = vw / 2 - (size * 1.5 + gap);
-    const startY = vh / 2 - (size * 1.5 + gap) + 60;
+    state = STATE.PLAYING; nextTarget = 1; steps = 0; lockInput = false;
+    if (settings.modeIdx !== 1) timer = 0; 
 
     let nums = [1,2,3,4,5,6,7,8,9].sort(() => Math.random() - 0.5);
-    cards = nums.map((n, i) => ({
-        id: n,
-        x: startX + (i % 3) * (size + gap),
-        y: startY + Math.floor(i / 3) * (size + gap),
-        w: size, h: size,
-        isFlipped: settings.previewMode,
-        isSolved: false
-    }));
+    cards = nums.map(n => ({ id: n, isFlipped: settings.hintTime > 0, isSolved: false, x:0, y:0, w:0, h:0 }));
+    recalcCards(); updateUI(); 
 
-    if (settings.previewMode) {
-        setTimeout(() => {
-            if (currentState === STATE.PLAYING) cards.forEach(c => c.isFlipped = false);
-        }, 1000);
+    if (settings.hintTime > 0) {
+        lockInput = true;
+        setTimeout(() => { if(state === STATE.PLAYING) { cards.forEach(c => c.isFlipped = false); lockInput = false; } }, settings.hintTime * 1000);
     }
 }
 
-function handleInput(clientX, clientY) {
-    if (currentState === STATE.INIT) {
-        initAudio(); currentState = STATE.LOBBY; updateUI(); return;
+function recalcCards() {
+    if (state !== STATE.PLAYING) return;
+    const isMobile = vw < 800;
+    const sidebarW = isMobile ? 100 : 220; 
+    const topMargin = 120, bottomMargin = 80;
+
+    const availableH = vh - topMargin - bottomMargin;
+    const availableW = vw - sidebarW; 
+    const area = Math.min(availableW * 0.9, availableH); 
+    const size = area / 3.5;
+    const gap = area * 0.05;
+    
+    const sx = sidebarW + (availableW - (size * 3 + gap * 2)) / 2;
+    const sy = topMargin + (availableH - (size * 3 + gap * 2)) / 2;
+
+    cards.forEach((c, i) => {
+        c.x = sx + (i%3)*(size+gap); c.y = sy + Math.floor(i/3)*(size+gap); c.w = size; c.h = size;
+    });
+}
+
+function handleInput(x, y, isDown, isMove = false) {
+    if (state === STATE.INIT) { if(isDown) { initAudio(); state = STATE.LOBBY; updateUI(); } return; }
+
+    const sM = buttons.find(b => b.type === 'sliderM');
+    const sS = buttons.find(b => b.type === 'sliderS');
+    if (sM && isDown && x > sM.x && x < sM.x + sM.w && y > sM.y - 20 && y < sM.y + 50) settings.isDragM = true;
+    if (sS && isDown && x > sS.x && x < sS.x + sS.w && y > sS.y - 20 && y < sS.y + 50) settings.isDragS = true;
+    
+    if (settings.isDragM) {
+        if (!isDown && !isMove) { settings.isDragM = false; return; }
+        settings.volM = Math.max(0, Math.min(1, (x - sM.x) / sM.w));
+        updateAudioVols(); return;
+    }
+    if (settings.isDragS) {
+        if (!isDown && !isMove) { settings.isDragS = false; return; }
+        settings.volS = Math.max(0, Math.min(1, (x - sS.x) / sS.w));
+        updateAudioVols(); return;
     }
 
-    // 按鈕檢測
-    for (let btn of buttons) {
-        if (clientX > btn.x && clientX < btn.x + btn.w && clientY > btn.y && clientY < btn.y + btn.h) {
-            playSFX('click'); btn.cb(); return;
-        }
+    if (!isDown || isMove) return;
+
+    for (let b of buttons) {
+        if (b.cb && x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) { b.cb(); return; }
     }
 
-    if (currentState === STATE.CHAR_SELECT) {
-        const itemW = 100, itemH = 140, startX = vw/2 - 220, startY = 250;
+    if (state === STATE.CHAR_SELECT) {
+        const gridW = 90, gridH = 120, spX = 100, spY = 140;
+        const startX = vw/2 - (4 * spX - 10) / 2, startY = vh * 0.3;
         CHARS.forEach((c, i) => {
-            const bx = startX + (i % 4) * 110;
-            const by = startY + Math.floor(i / 4) * 160;
-            if (clientX > bx && clientX < bx + itemW && clientY > by && clientY < by + itemH) {
-                const idx = selectedCharIndices.indexOf(i);
-                if (idx > -1) selectedCharIndices.splice(idx, 1);
-                else if (selectedCharIndices.length < totalPlayers) selectedCharIndices.push(i);
-                playSFX('click'); updateUI();
+            const bx = startX + (i % 4) * spX, by = startY + Math.floor(i / 4) * spY;
+            if (x > bx && x < bx + gridW && y > by && y < by + gridH) {
+                const fIdx = players.findIndex(p => p.charIdx === i);
+                if (fIdx > -1) players.splice(fIdx, 1);
+                else if (players.length < 4) players.push({ charIdx: i, score: 0, timeUsed: 0, name: c.name });
+                playSFX('CLICK'); updateUI();
             }
         });
     }
 
-    if (currentState === STATE.PLAYING && !lockInput) {
-        // 檢查暫停 (右上角)
-        if (clientX > vw - 60 && clientY < 60) {
-            currentState = STATE.LOBBY; updateUI(); playMusic('LOBBY'); return;
-        }
-
+    if (state === STATE.PLAYING && !lockInput) {
         cards.forEach(c => {
-            if (!c.isFlipped && !c.isSolved && clientX > c.x && clientX < c.x + c.w && clientY > c.y && clientY < c.y + c.h) {
-                flipCard(c);
-            }
+            if (!c.isFlipped && !c.isSolved && x > c.x && x < c.x + c.w && y > c.y && y < c.y + c.h) { onCardClick(c); }
         });
     }
 }
 
-function flipCard(card) {
-    card.isFlipped = true;
-    steps++;
-    if (card.id === nextTarget) {
-        card.isSolved = true;
-        nextTarget++;
-        playSFX('win');
-        spawnParticles(card.x + card.w/2, card.y + card.h/2, "#FFD700");
-        if (nextTarget > 9) {
-            lockInput = true;
-            setTimeout(finishRound, 1000);
+function onCardClick(c) {
+    steps++; c.isFlipped = true;
+    if (c.id === nextTarget) {
+        c.isSolved = true; nextTarget++; playSFX('CORRECT');
+        spawnParticles(c.x + c.w/2, c.y + c.h/2, "#FFD700");
+        
+        if (nextTarget > 9) { 
+            lockInput = true; totalBoardsCleared++;
+            const p = players[currentPlayerIdx];
+            if (settings.modeIdx === 0) p.score += Math.max(0, 1000 - Math.floor(timer * 10) - steps * 5);
+            else if (settings.modeIdx === 2) p.score += timer; 
+            setTimeout(nextRound, 800); 
         }
     } else {
-        lockInput = true;
-        shake = 15;
-        playSFX('wrong');
-        spawnParticles(card.x + card.w/2, card.y + card.h/2, "#FF4400");
+        lockInput = true; shake = 15; playSFX('WRONG');
+        spawnParticles(c.x + c.w/2, c.y + c.h/2, "#FF3300");
+        
         setTimeout(() => {
-            cards.forEach(c => { c.isFlipped = false; c.isSolved = false; });
-            nextTarget = 1;
-            lockInput = false;
-            if (gameMode === 'MULTI') {
-                currentPlayerIdx = (currentPlayerIdx + 1) % totalPlayers;
+            cards.forEach(card => { card.isFlipped = false; card.isSolved = false; });
+            nextTarget = 1; lockInput = false;
+            
+            if (settings.shuffleOnFail) {
+                let activeIds = cards.map(card => card.id).sort(() => Math.random() - 0.5);
+                cards.forEach((card, idx) => card.id = activeIds[idx]);
+            }
+            if (players.length > 1 && settings.modeIdx !== 1) {
+                currentPlayerIdx = (currentPlayerIdx + 1) % players.length;
                 initRound();
             }
         }, 1000);
     }
 }
 
-function finishRound() {
-    const p = players[currentPlayerIdx];
-    p.score += Math.max(50, 1000 - Math.floor(gameTimer * 10) - steps * 5);
-    if (currentRound < MAX_ROUNDS) {
-        currentRound++;
+function nextRound() {
+    const targetRounds = settings.modeIdx === 2 ? 5 : settings.rounds; 
+    if (settings.modeIdx === 1) {
         initRound();
     } else {
-        currentState = STATE.GAME_OVER;
-        playMusic('LOBBY');
-        updateUI();
+        if (players.length > 1) {
+            currentPlayerIdx++;
+            if (currentPlayerIdx >= players.length) { currentPlayerIdx = 0; currentRound++; }
+            if (currentRound > targetRounds) gameOver(); else initRound();
+        } else {
+            currentRound++;
+            if (currentRound > targetRounds) gameOver(); else initRound();
+        }
     }
 }
 
-// --- 6. 繪圖與渲染 ---
-function mainLoop() {
-    // 背景漸變
-    const grad = ctx.createRadialGradient(vw/2, vh/2, 0, vw/2, vh/2, vw);
-    grad.addColorStop(0, "#1a120a");
-    grad.addColorStop(1, "#050505");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, vw, vh);
+function gameOver() {
+    state = STATE.GAME_OVER; playMusic('LOBBY'); updateUI();
+}
 
-    if (shake > 0) {
-        ctx.save();
-        ctx.translate(Math.random()*shake - shake/2, Math.random()*shake - shake/2);
-        shake *= 0.85;
-    }
+// --- 渲染系統 ---
+function draw() {
+    ctx.fillStyle = "#020205"; ctx.fillRect(0, 0, vw, vh);
 
-    switch (currentState) {
+    if (shake > 0) { ctx.save(); ctx.translate(Math.random()*shake - shake/2, Math.random()*shake - shake/2); shake *= 0.85; }
+
+    switch(state) {
         case STATE.INIT: drawInit(); break;
         case STATE.LOBBY: drawLobby(); break;
         case STATE.SETTINGS: drawSettings(); break;
         case STATE.CHAR_SELECT: drawCharSelect(); break;
         case STATE.PLAYING: drawGame(); break;
         case STATE.GAME_OVER: drawGameOver(); break;
+        case STATE.ENTER_NAME: drawEnterName(); break;
+        case STATE.LEADERBOARD: drawLeaderboard(); break;
     }
 
-    drawUI();
+    drawParticles(); drawButtons();
     if (shake > 0) ctx.restore();
 
-    if (currentState === STATE.PLAYING && !lockInput) gameTimer += 1/60;
-    requestAnimationFrame(mainLoop);
+    if (state === STATE.PLAYING && !lockInput) {
+        if (settings.modeIdx === 1) { timer -= 1/60; if (timer <= 0) { timer = 0; gameOver(); } } 
+        else { timer += 1/60; }
+    }
+    requestAnimationFrame(draw);
 }
 
 function drawInit() {
-    drawText("ROYAL ALCHEMY", vw/2, vh/2 - 40, 70, "#FFD700", true);
-    drawText("觸碰螢幕開始煉金儀式", vw/2, vh/2 + 60, 24, "#FFF");
+    drawText("GRAND MASTER", vw/2, vh/2 - 30, 55, "#FFD700", true);
+    drawText("ALCHEMIST", vw/2, vh/2 + 25, 35, "#D4AF37", true);
+    drawText("點擊喚醒古代試煉", vw/2, vh/2 + 100, 18, "#88a");
 }
 
-function drawLobby() {
-    drawText(LANG.title, vw/2, vh/2 - 120, 60, "#FFD700", true);
-}
-
-function drawSettings() {
-    drawText(LANG.settings, vw/2, vh/2 - 160, 40, "#FFD700");
-}
+function drawLobby() { drawText("聖域：大師記憶", vw/2, vh * 0.25, 50, "#FFD700", true); }
+function drawSettings() { drawText("試煉配置總機", vw/2, 60, 36, "#FFD700", true); }
 
 function drawCharSelect() {
-    drawText(LANG.charSelect + " (" + selectedCharIndices.length + "/" + totalPlayers + ")", vw/2, 100, 36, "#FFD700");
-    const itemW = 100, itemH = 140, startX = vw/2 - 220, startY = 250;
+    drawText(`集結英雄 (最多4人)`, vw/2, 70, 28, "#FFD700");
+    const gridW = 90, gridH = 120, spX = 100, spY = 140;
+    const startX = vw/2 - (4 * spX - 10) / 2, startY = vh * 0.3;
+
     CHARS.forEach((c, i) => {
-        const bx = startX + (i % 4) * 110;
-        const by = startY + Math.floor(i / 4) * 160;
-        const isSel = selectedCharIndices.includes(i);
-        ctx.fillStyle = isSel ? c.color : "#222";
-        ctx.strokeStyle = isSel ? "#FFF" : "#444";
-        ctx.lineWidth = 2;
-        roundRect(bx, by, itemW, itemH, 15, true, true);
-        drawText(c.icon, bx + 50, by + 60, 50, "#FFF");
-        drawText(c.name, bx + 50, by + 110, 16, isSel ? "#000" : "#FFF");
+        const bx = startX + (i % 4) * spX, by = startY + Math.floor(i / 4) * spY;
+        const pNum = players.findIndex(p => p.charIdx === i) + 1;
+        ctx.fillStyle = pNum ? "rgba(255,215,0,0.15)" : "rgba(255,255,255,0.02)";
+        ctx.strokeStyle = pNum ? c.color : "rgba(255,255,255,0.08)";
+        roundRect(bx, by, gridW, gridH, 10, true, true);
+        drawText(c.icon, bx + gridW/2, by + gridH * 0.45, 40, "#FFF");
+        drawText(c.name, bx + gridW/2, by + gridH * 0.8, 14, pNum ? c.color : "#666");
+        if (pNum) {
+            ctx.fillStyle = "#FF4500"; ctx.beginPath(); ctx.arc(bx + gridW, by, 12, 0, Math.PI*2); ctx.fill();
+            drawText("P"+pNum, bx + gridW, by + 5, 12, "#FFF");
+        }
     });
 }
 
 function drawGame() {
-    const p = players[currentPlayerIdx];
-    const char = CHARS[p.charIdx];
-    
-    // Top Bar
-    ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillRect(0, 0, vw, 110);
-    drawText(`${char.icon} ${char.name}`, 150, 45, 24, char.color);
-    drawText(`Round ${currentRound}/${MAX_ROUNDS}`, vw/2, 45, 20, "#FFD700");
-    drawText(`Time: ${gameTimer.toFixed(1)}s`, vw - 150, 45, 18, "#FFF");
-    drawText(`Steps: ${steps}`, vw - 150, 75, 18, "#CCC");
+    const isMobile = vw < 800;
+    const sidebarW = isMobile ? 100 : 220;
 
-    // Cards
-    cards.forEach(c => {
-        ctx.save();
-        ctx.translate(c.x + c.w/2, c.y + c.h/2);
-        
-        // 符石外框與底色
-        ctx.fillStyle = c.isFlipped || c.isSolved ? "#e0d0b0" : "#3d2e1e";
-        if (c.isSolved) ctx.shadowBlur = 15; ctx.shadowColor = "#FFD700";
-        ctx.strokeStyle = "#c0a080";
-        ctx.lineWidth = 3;
-        roundRect(-c.w/2, -c.h/2, c.w, c.h, 12, true, true);
+    // 左側面板
+    ctx.fillStyle = "rgba(10, 10, 15, 0.95)"; ctx.fillRect(0, 0, sidebarW, vh);
+    ctx.strokeStyle = "rgba(212, 175, 55, 0.4)"; ctx.beginPath(); ctx.moveTo(sidebarW, 0); ctx.lineTo(sidebarW, vh); ctx.stroke();
 
-        if (c.isFlipped || c.isSolved) {
-            drawText(c.id, 0, 15, 40, "#2a2015");
-        } else {
-            drawText("?", 0, 10, 30, "#666");
+    const blockH = isMobile ? 100 : 130;
+    const startY = Math.max(50, (vh - (players.length * blockH)) / 2);
+
+    players.forEach((p, i) => {
+        const c = CHARS[p.charIdx];
+        const isActive = i === currentPlayerIdx;
+        const py = startY + i * blockH;
+
+        if (isActive) {
+            ctx.fillStyle = "rgba(255, 215, 0, 0.2)"; ctx.fillRect(0, py - 10, sidebarW, blockH - 10);
+            ctx.fillStyle = "#FFD700"; ctx.fillRect(0, py - 10, 5, blockH - 10);
         }
-        ctx.restore();
+
+        drawText(c.icon, sidebarW / 2, py + 25, isMobile ? 35 : 50, "#FFF");
+        
+        let scoreTxt = "";
+        if (settings.modeIdx === 0) scoreTxt = Math.floor(p.score);
+        else if (settings.modeIdx === 1) scoreTxt = `通關: ${totalBoardsCleared}`;
+        else scoreTxt = p.score.toFixed(1) + "s";
+
+        if (!isMobile) {
+            drawText(c.name, sidebarW / 2, py + 55, 16, c.color);
+            drawText(scoreTxt, sidebarW / 2, py + 85, 24, "#FFF", true);
+        } else { drawText(scoreTxt, sidebarW / 2, py + 65, 18, "#FFF", true); }
     });
 
-    // 暫停符號
-    drawText("X", vw - 30, 35, 24, "#900");
+    const cx = sidebarW + (vw - sidebarW) / 2;
+    let roundTxt = settings.modeIdx === 1 ? `無限生存模式` : `ROUND ${currentRound} / ${settings.modeIdx===2?5:settings.rounds}`;
+    let timeCol = (settings.modeIdx === 1 && timer < 10) ? "#f44" : "#FFF";
+    
+    drawText(roundTxt, cx, 50, 24, "#FFD700", true);
+    drawText(formatTime(timer), cx, 90, 26, timeCol);
+
+    cards.forEach(c => {
+        ctx.save(); ctx.translate(c.x + c.w/2, c.y + c.h/2);
+        const grad = ctx.createLinearGradient(-c.w/2, -c.h/2, c.w/2, c.h/2);
+        if (c.isFlipped || c.isSolved) { grad.addColorStop(0, "#fffaf0"); grad.addColorStop(1, "#d4af37"); } 
+        else { grad.addColorStop(0, "#1a1a2e"); grad.addColorStop(1, "#0d0d1a"); }
+        
+        ctx.fillStyle = grad;
+        if (c.isSolved) { ctx.shadowBlur = 20; ctx.shadowColor = "#FFD700"; }
+        ctx.strokeStyle = c.isSolved ? "#FFF" : "rgba(212,175,55,0.3)";
+        roundRect(-c.w/2, -c.h/2, c.w, c.h, 15, true, true);
+        
+        if (c.isFlipped || c.isSolved) drawText(c.id, 0, 18, c.w * 0.45, "#111");
+        ctx.restore();
+    });
 }
 
 function drawGameOver() {
-    drawText("試煉結算", vw/2, 100, 60, "#FFD700", true);
-    players.sort((a,b) => b.score - a.score).forEach((p, i) => {
+    drawText("試煉終焉", vw/2, 80, 50, "#FFD700", true);
+    let sorted = [...players];
+    if (settings.modeIdx === 2) sorted.sort((a,b) => a.score - b.score); else sorted.sort((a,b) => b.score - a.score);
+
+    sorted.forEach((p, i) => {
         const c = CHARS[p.charIdx];
-        drawText(`${i+1}. ${c.icon} ${p.name} - 積分: ${Math.floor(p.score)}`, vw/2, 250 + i * 80, 30, c.color);
+        let val = settings.modeIdx === 0 ? Math.floor(p.score) + " pts" : 
+                  settings.modeIdx === 1 ? `通關 ${totalBoardsCleared} 題` : p.score.toFixed(2) + " 秒";
+        drawText(`${i+1}. ${c.icon} ${c.name} - ${val}`, vw/2, 180 + i * 50, 24, c.color);
     });
 }
 
-// --- 輔助函式 ---
-function drawText(txt, x, y, size, color, glow = false) {
-    ctx.textAlign = 'center';
-    ctx.fillStyle = color;
-    if (glow) { ctx.shadowBlur = 20; ctx.shadowColor = color; }
-    ctx.font = `bold ${size}px 'serif'`;
-    ctx.fillText(txt, x, y);
-    ctx.shadowBlur = 0;
-}
-
-function drawUI() {
-    buttons.forEach(btn => {
-        const grad = ctx.createLinearGradient(btn.x, btn.y, btn.x, btn.y + btn.h);
-        grad.addColorStop(0, "#5d2e0c"); grad.addColorStop(1, "#3d1e08");
-        ctx.fillStyle = grad; 
-        ctx.strokeStyle = "#daa520"; ctx.lineWidth = 3;
-        roundRect(btn.x, btn.y, btn.w, btn.h, 10, true, true);
-        drawText(btn.text, btn.x + btn.w/2, btn.y + btn.h/2 + 8, 22, "#f0e0c0");
-    });
+function drawEnterName() {
+    drawText("締造傳奇", vw/2, 100, 45, "#FFD700", true);
+    drawText("請輸入大名以鐫刻於聖域之柱", vw/2, 150, 18, "#aaa");
     
-    // 粒子系統更新
-    particles.forEach((p, i) => {
-        p.x += p.vx; p.y += p.vy; p.life -= 0.02;
-        ctx.globalAlpha = p.life; ctx.fillStyle = p.color;
-        ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2); ctx.fill();
-        if (p.life <= 0) particles.splice(i, 1);
+    ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.strokeStyle = "#D4AF37";
+    roundRect(vw/2 - 200, 200, 400, 60, 10, true, true);
+    drawText(inputName + (Math.floor(Date.now()/500)%2===0 ? "_" : ""), vw/2, 240, 32, "#FFF");
+}
+
+function drawLeaderboard() {
+    drawText("聖域英雄榜", vw/2, 70, 45, "#FFD700", true);
+    if (leaderboard.length === 0) { drawText("尚無傳奇誕生", vw/2, 200, 24, "#666"); } 
+    else {
+        leaderboard.forEach((l, i) => {
+            const y = 150 + i * 40;
+            let val = l.mode === MODES[2] ? parseFloat(l.score).toFixed(2)+"s" : l.score;
+            ctx.textAlign = 'left'; drawText(`${i+1}. ${l.icon} ${l.name}`, vw/2 - 250, y, 22, "#FFF");
+            ctx.textAlign = 'center'; drawText(`[${l.mode}]`, vw/2 + 50, y, 16, "#888");
+            ctx.textAlign = 'right'; drawText(val, vw/2 + 250, y, 22, "#FFD700");
+        });
+        ctx.textAlign = 'center'; 
+    }
+}
+
+function formatTime(s) { let m = Math.floor(s / 60); let sec = (s % 60).toFixed(1); return `${m}:${sec.padStart(4, '0')}`; }
+
+function drawText(txt, x, y, size, col, glow = false) {
+    if (!ctx.textAlign) ctx.textAlign = 'center';
+    ctx.fillStyle = col; if (glow) { ctx.shadowBlur = 15; ctx.shadowColor = col; }
+    ctx.font = `bold ${size}px 'Cinzel', 'Noto Serif TC', serif`;
+    ctx.fillText(txt, x, y); ctx.shadowBlur = 0;
+}
+
+function drawButtons() {
+    buttons.forEach(b => {
+        if (b.type === 'sliderM' || b.type === 'sliderS') {
+            const barH = 12, fillW = (b.type==='sliderM'?settings.volM:settings.volS) * b.w;
+            ctx.fillStyle = "#222"; roundRect(b.x, b.y, b.w, barH, 6, true, false);
+            ctx.fillStyle = "#d4af37"; roundRect(b.x, b.y, fillW, barH, 6, true, false);
+            ctx.fillStyle = "#FFF"; ctx.beginPath(); ctx.arc(b.x + fillW, b.y + barH/2, 12, 0, Math.PI*2); ctx.fill();
+            drawText(`${b.txt}: ${Math.round((b.type==='sliderM'?settings.volM:settings.volS)*100)}%`, b.x + b.w/2, b.y - 12, 16, "#aaa");
+        } else if (b.type === 'key') {
+            ctx.fillStyle = "rgba(40,40,50,0.8)"; ctx.strokeStyle = "#555";
+            roundRect(b.x, b.y, b.w, b.h, 8, true, true);
+            drawText(b.txt, b.x + b.w/2, b.y + b.h/2 + 6, b.txt.length > 1 ? 14 : 20, "#FFF");
+        } else {
+            ctx.fillStyle = "rgba(30, 30, 40, 0.7)"; ctx.strokeStyle = "rgba(212, 175, 55, 0.6)";
+            roundRect(b.x, b.y, b.w, b.h, 12, true, true);
+            drawText(b.txt, b.x + b.w/2, b.y + b.h/2 + 8, 20, "#e8d08b");
+        }
     });
-    ctx.globalAlpha = 1;
 }
 
 function roundRect(x, y, w, h, r, fill, stroke) {
@@ -424,27 +620,32 @@ function roundRect(x, y, w, h, r, fill, stroke) {
     if (fill) ctx.fill(); if (stroke) ctx.stroke();
 }
 
-function spawnParticles(x, y, color) {
-    for(let i=0; i<12; i++) {
-        particles.push({ 
-            x, y, color, 
-            vx: (Math.random()-0.5)*8, 
-            vy: (Math.random()-0.5)*8, 
-            life: 1 
-        });
-    }
+function spawnParticles(x, y, col) { for(let i=0; i<15; i++) particles.push({ x, y, col, vx: (Math.random()-0.5)*12, vy: (Math.random()-0.5)*12, life: 1 }); }
+
+function drawParticles() {
+    particles.forEach((p, i) => {
+        p.x += p.vx; p.y += p.vy; p.life -= 0.03;
+        ctx.globalAlpha = p.life; ctx.fillStyle = p.col;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI*2); ctx.fill();
+        if (p.life <= 0) particles.splice(i, 1);
+    });
+    ctx.globalAlpha = 1;
 }
 
-// 事件監聽
 window.addEventListener('resize', resize);
-canvas.addEventListener('mousedown', e => handleInput(e.clientX, e.clientY));
-canvas.addEventListener('touchstart', e => { 
-    e.preventDefault(); 
-    handleInput(e.touches[0].clientX, e.touches[0].clientY); 
-}, { passive: false });
-
-resize();
-requestAnimationFrame(mainLoop);
+const handleEvent = (e, isDown, isMove) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+    const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+    handleInput(x, y, isDown, isMove);
+};
+canvas.addEventListener('mousedown', e => handleEvent(e, true, false));
+canvas.addEventListener('mousemove', e => handleEvent(e, false, true));
+canvas.addEventListener('mouseup', () => handleInput(0, 0, false, false));
+canvas.addEventListener('touchstart', e => { e.preventDefault(); handleEvent(e, true, false); }, {passive: false});
+canvas.addEventListener('touchmove', e => { e.preventDefault(); handleEvent(e, false, true); }, {passive: false});
+canvas.addEventListener('touchend', () => handleInput(0, 0, false, false));
+resize(); draw();
 </script>
 </body>
 </html>
