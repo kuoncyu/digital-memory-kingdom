@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Royal Memory: Ultimate Master</title>
+    <title>Royal Memory: Speedrun Master</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Noto+Serif+TC:wght@400;700&display=swap');
         body, html { 
@@ -19,8 +19,8 @@
 
 <script>
 /**
- * ROYAL MEMORY: ULTIMATE MASTER EDITION
- * 更新亮點：絕對置中對齊 (Absolute Center Alignment)、空靈水晶音效引擎、精準排版
+ * ROYAL MEMORY: SPEEDRUN MASTER
+ * 核心更新：單人10題計時榜、多人無提示不洗牌/有提示洗牌制、極致對齊
  */
 
 const canvas = document.getElementById('gameCanvas');
@@ -33,24 +33,22 @@ const CHARS = [
     { name: "路易親王", icon: "🦅", color: "#bdc3c7" }, { name: "艾琳女爵", icon: "🌿", color: "#00b09b" },
     { name: "凱恩大公", icon: "⚒️", color: "#8e44ad" }, { name: "索菲賢者", icon: "📜", color: "#f39c12" }
 ];
-const MODES = ["經典計分", "5分計時生存", "5題競速賽"];
+
+const TOTAL_ROUNDS = 10; // 固定 10 題
 
 let state = STATE.INIT;
 let vw = window.innerWidth, vh = window.innerHeight;
 let buttons = [], particles = [], cards = [];
 let shake = 0, lockInput = false;
 
-// 遊戲狀態與設定
-let settings = { 
-    volM: 0.25, volS: 0.5, isDragM: false, isDragS: false,
-    hintTime: 1, shuffleOnFail: false, rounds: 3, modeIdx: 0 
-};
+// 遊戲設定
+let settings = { volM: 0.25, volS: 0.5, isDragM: false, isDragS: false, hintTime: 0 };
 let players = [], currentPlayerIdx = 0, currentRound = 1;
-let nextTarget = 1, timer = 0, steps = 0, totalBoardsCleared = 0;
+let nextTarget = 1, timer = 0, steps = 0;
 let leaderboard = [];
 let inputName = "";
 
-// --- 空靈水晶音效引擎 (Ethereal Ambient Audio Engine) ---
+// --- 空靈水晶音效引擎 ---
 let audioCtx, musicGain, sfxGain;
 let bgmNodes = [];
 let bgmInterval = null;
@@ -92,18 +90,12 @@ function playMusic(type) {
     if (type === 'LOBBY') {
         const freqs = [130.81, 196.00, 246.94, 293.66, 329.63]; 
         freqs.forEach((f, i) => {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            const lfo = audioCtx.createOscillator();
-            const lfoGain = audioCtx.createGain();
+            const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
+            const lfo = audioCtx.createOscillator(); const lfoGain = audioCtx.createGain();
             
-            osc.type = i % 2 === 0 ? 'sine' : 'triangle';
-            osc.frequency.value = f + (Math.random()*0.6 - 0.3);
-            
-            lfo.type = 'sine'; lfo.frequency.value = 0.05 + i * 0.01; 
-            lfoGain.gain.value = 0.04;
+            osc.type = i % 2 === 0 ? 'sine' : 'triangle'; osc.frequency.value = f + (Math.random()*0.6 - 0.3);
+            lfo.type = 'sine'; lfo.frequency.value = 0.05 + i * 0.01; lfoGain.gain.value = 0.04;
             lfo.connect(lfoGain); lfoGain.connect(gain.gain); lfo.start(now);
-            
             gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.06, now + 3);
             
             osc.connect(gain); gain.connect(musicGain); osc.start(now);
@@ -141,8 +133,7 @@ function playSFX(type) {
         g.gain.setValueAtTime(0.3, now); g.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
         osc.start(now); osc.stop(now + 0.1);
     } else if (type === 'CORRECT') {
-        osc.type = 'sine'; const note = 523.25 * Math.pow(1.059, nextTarget * 2); 
-        osc.frequency.setValueAtTime(note, now);
+        osc.type = 'sine'; const note = 523.25 * Math.pow(1.059, nextTarget * 2); osc.frequency.setValueAtTime(note, now);
         g.gain.setValueAtTime(0, now); g.gain.linearRampToValueAtTime(0.3, now + 0.02); g.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
         osc.start(now); osc.stop(now + 0.6);
     } else if (type === 'WRONG') {
@@ -163,30 +154,24 @@ function updateUI() {
     if (state === STATE.LOBBY) {
         addButton(cx - 120, cy + 20, 240, 60, "啟動大師試煉", () => { state = STATE.CHAR_SELECT; players=[]; updateUI(); playSFX('CLICK'); });
         addButton(cx - 120, cy + 100, 240, 50, "試煉設定", () => { state = STATE.SETTINGS; updateUI(); playSFX('CLICK'); });
-        addButton(cx - 120, cy + 170, 240, 50, "英雄榜", () => { state = STATE.LEADERBOARD; updateUI(); playSFX('CLICK'); });
+        addButton(cx - 120, cy + 170, 240, 50, "英雄榜 (單人)", () => { state = STATE.LEADERBOARD; updateUI(); playSFX('CLICK'); });
     } 
     else if (state === STATE.SETTINGS) {
-        const sw = isMobile ? vw * 0.8 : 350, gap = 20;
-        const startX1 = isMobile ? cx - sw/2 : cx - sw - gap;
-        const startX2 = isMobile ? cx - sw/2 : cx + gap;
-        const sy = 120;
+        const sw = isMobile ? vw * 0.8 : 350;
+        const startX = cx - sw/2;
+        const sy = 150;
 
-        addButton(startX1, sy, sw, 30, "音樂音量", null, 'sliderM');
-        addButton(startX1, sy + 70, sw, 30, "音效音量", null, 'sliderS');
-        addButton(startX1, sy + 140, sw, 50, "全螢幕模式", toggleFS);
-        addButton(startX1, sy + 210, sw, 50, `提示時間: ${settings.hintTime} 秒`, () => { settings.hintTime = (settings.hintTime + 1) % 3; updateUI(); playSFX('CLICK'); });
-
-        const sy2 = isMobile ? sy + 280 : sy, col2X = isMobile ? startX1 : startX2;
-        addButton(col2X, sy2, sw, 50, `失敗重新洗牌: ${settings.shuffleOnFail ? '開啟' : '關閉'}`, () => { settings.shuffleOnFail = !settings.shuffleOnFail; updateUI(); playSFX('CLICK'); });
-        addButton(col2X, sy2 + 70, sw, 50, `模式: ${MODES[settings.modeIdx]}`, () => { settings.modeIdx = (settings.modeIdx + 1) % 3; updateUI(); playSFX('CLICK'); });
+        addButton(startX, sy, sw, 30, "音樂音量", null, 'sliderM');
+        addButton(startX, sy + 70, sw, 30, "音效音量", null, 'sliderS');
+        addButton(startX, sy + 140, sw, 50, "全螢幕模式", toggleFS);
         
-        if (settings.modeIdx !== 1) { 
-            let rText = settings.modeIdx === 2 ? `固定題數: 5 題` : `比賽回合數: ${settings.rounds}`;
-            addButton(col2X, sy2 + 140, sw, 50, rText, () => { 
-                if(settings.modeIdx === 0) settings.rounds = settings.rounds >= 8 ? 1 : settings.rounds + 1; 
-                updateUI(); playSFX('CLICK'); 
-            });
-        }
+        // 提示秒數決定洗牌模式
+        let hintModeText = settings.hintTime === 0 ? "記憶傳承 (無提示/失敗不洗牌)" : `混沌洗牌 (提示: ${settings.hintTime} 秒)`;
+        addButton(startX, sy + 210, sw, 50, hintModeText, () => { 
+            settings.hintTime = (settings.hintTime + 1) % 4; // 0, 1, 2, 3 秒
+            updateUI(); playSFX('CLICK'); 
+        });
+
         addButton(cx - 100, vh - 100, 200, 50, "⬅ 返回大廳", () => { state = STATE.LOBBY; updateUI(); playSFX('CLICK'); });
     }
     else if (state === STATE.CHAR_SELECT) {
@@ -197,10 +182,10 @@ function updateUI() {
     } 
     else if (state === STATE.PLAYING) {
         recalcCards();
-        addButton(vw - 100, vh - 60, 80, 40, "放棄", () => { state = STATE.GAME_OVER; playSFX('CLICK'); updateUI(); });
+        addButton(vw - 100, vh - 60, 80, 40, "放棄", () => { gameOver(); playSFX('CLICK'); });
     }
     else if (state === STATE.GAME_OVER) {
-        addButton(cx - 120, vh - 150, 240, 60, "刻下尊名", () => { state = STATE.ENTER_NAME; inputName = ""; playSFX('CLICK'); updateUI(); });
+        addButton(cx - 120, vh - 100, 240, 60, "返回大廳", () => { state = STATE.LOBBY; updateUI(); playSFX('CLICK'); });
     }
     else if (state === STATE.ENTER_NAME) { buildKeyboard(); }
     else if (state === STATE.LEADERBOARD) {
@@ -234,13 +219,10 @@ function handleKey(k) {
 }
 
 function saveScore() {
-    let finalScore = 0; const p = players[0]; 
-    if (settings.modeIdx === 0) finalScore = Math.floor(p.score);
-    else if (settings.modeIdx === 1) finalScore = totalBoardsCleared * 1000;
-    else finalScore = p.score;
-
-    leaderboard.push({ name: inputName, score: finalScore, mode: MODES[settings.modeIdx], icon: CHARS[p.charIdx].icon });
-    leaderboard.sort((a, b) => a.mode === MODES[2] ? a.score - b.score : b.score - a.score);
+    const p = players[0]; 
+    leaderboard.push({ name: inputName, time: timer, icon: CHARS[p.charIdx].icon });
+    // 排行榜：單人時間越短排名越高 (升序排列)
+    leaderboard.sort((a, b) => a.time - b.time);
     if (leaderboard.length > 10) leaderboard.length = 10; 
     
     playMusic('LOBBY'); state = STATE.LEADERBOARD; updateUI();
@@ -256,24 +238,30 @@ function toggleFS() {
 // --- 遊戲邏輯 ---
 function startGame() {
     playSFX('CLICK');
-    currentPlayerIdx = 0; currentRound = 1; totalBoardsCleared = 0;
-    players.forEach(p => { p.score = 0; p.timeUsed = 0; });
-    if (settings.modeIdx === 1) timer = 300; else timer = 0; 
+    currentPlayerIdx = 0; currentRound = 1; timer = 0;
+    players.forEach(p => { p.score = 0; }); // 多人競賽的 score 紀錄勝出題數
     playMusic('GAME'); initRound();
 }
 
 function initRound() {
     state = STATE.PLAYING; nextTarget = 1; steps = 0; lockInput = false;
-    if (settings.modeIdx !== 1) timer = 0; 
 
     let nums = [1,2,3,4,5,6,7,8,9].sort(() => Math.random() - 0.5);
-    cards = nums.map(n => ({ id: n, isFlipped: settings.hintTime > 0, isSolved: false, x:0, y:0, w:0, h:0 }));
+    cards = nums.map(n => ({ id: n, isFlipped: false, isSolved: false, x:0, y:0, w:0, h:0 }));
     recalcCards(); updateUI(); 
 
-    if (settings.hintTime > 0) {
-        lockInput = true;
-        setTimeout(() => { if(state === STATE.PLAYING) { cards.forEach(c => c.isFlipped = false); lockInput = false; } }, settings.hintTime * 1000);
-    }
+    if (settings.hintTime > 0) showHint();
+}
+
+function showHint() {
+    lockInput = true;
+    cards.forEach(c => c.isFlipped = true);
+    setTimeout(() => { 
+        if(state === STATE.PLAYING) { 
+            cards.forEach(c => c.isFlipped = false); 
+            lockInput = false; 
+        } 
+    }, settings.hintTime * 1000);
 }
 
 function recalcCards() {
@@ -329,7 +317,7 @@ function handleInput(x, y, isDown, isMove = false) {
             if (x > bx && x < bx + gridW && y > by && y < by + gridH) {
                 const fIdx = players.findIndex(p => p.charIdx === i);
                 if (fIdx > -1) players.splice(fIdx, 1);
-                else if (players.length < 4) players.push({ charIdx: i, score: 0, timeUsed: 0, name: c.name });
+                else if (players.length < 4) players.push({ charIdx: i, score: 0, name: c.name });
                 playSFX('CLICK'); updateUI();
             }
         });
@@ -349,11 +337,18 @@ function onCardClick(c) {
         spawnParticles(c.x + c.w/2, c.y + c.h/2, "#FFD700");
         
         if (nextTarget > 9) { 
-            lockInput = true; totalBoardsCleared++;
-            const p = players[currentPlayerIdx];
-            if (settings.modeIdx === 0) p.score += Math.max(0, 1000 - Math.floor(timer * 10) - steps * 5);
-            else if (settings.modeIdx === 2) p.score += timer; 
-            setTimeout(nextRound, 800); 
+            lockInput = true; 
+            players[currentPlayerIdx].score++; // 多人模式：累積勝利題數
+
+            setTimeout(() => {
+                currentRound++;
+                if (currentRound > TOTAL_ROUNDS) { gameOver(); } 
+                else {
+                    // 下一題換下一位玩家先攻
+                    if (players.length > 1) currentPlayerIdx = (currentPlayerIdx + 1) % players.length;
+                    initRound();
+                }
+            }, 800); 
         }
     } else {
         lockInput = true; shake = 15; playSFX('WRONG');
@@ -363,36 +358,32 @@ function onCardClick(c) {
             cards.forEach(card => { card.isFlipped = false; card.isSolved = false; });
             nextTarget = 1; lockInput = false;
             
-            if (settings.shuffleOnFail) {
+            // 換下一位挑戰者
+            if (players.length > 1) {
+                currentPlayerIdx = (currentPlayerIdx + 1) % players.length;
+            }
+
+            // 根據提示秒數決定洗牌模式
+            if (settings.hintTime > 0) {
+                // 有提示：洗牌並顯示提示
                 let activeIds = cards.map(card => card.id).sort(() => Math.random() - 0.5);
                 cards.forEach((card, idx) => card.id = activeIds[idx]);
-            }
-            if (players.length > 1 && settings.modeIdx !== 1) {
-                currentPlayerIdx = (currentPlayerIdx + 1) % players.length;
-                initRound();
-            }
+                showHint();
+            } 
+            // 若為 0 秒：不洗牌也不提示，牌的順序保留
         }, 1000);
     }
 }
 
-function nextRound() {
-    const targetRounds = settings.modeIdx === 2 ? 5 : settings.rounds; 
-    if (settings.modeIdx === 1) {
-        initRound();
-    } else {
-        if (players.length > 1) {
-            currentPlayerIdx++;
-            if (currentPlayerIdx >= players.length) { currentPlayerIdx = 0; currentRound++; }
-            if (currentRound > targetRounds) gameOver(); else initRound();
-        } else {
-            currentRound++;
-            if (currentRound > targetRounds) gameOver(); else initRound();
-        }
-    }
-}
-
 function gameOver() {
-    state = STATE.GAME_OVER; playMusic('LOBBY'); updateUI();
+    playMusic('LOBBY');
+    // 只有單人模式會進入英雄榜名單輸入
+    if (players.length === 1 && currentRound > TOTAL_ROUNDS) {
+        state = STATE.ENTER_NAME; inputName = "";
+    } else {
+        state = STATE.GAME_OVER; 
+    }
+    updateUI();
 }
 
 // --- 渲染系統 ---
@@ -415,24 +406,21 @@ function draw() {
     drawParticles(); drawButtons();
     if (shake > 0) ctx.restore();
 
-    if (state === STATE.PLAYING && !lockInput) {
-        if (settings.modeIdx === 1) { timer -= 1/60; if (timer <= 0) { timer = 0; gameOver(); } } 
-        else { timer += 1/60; }
-    }
+    if (state === STATE.PLAYING) { timer += 1/60; }
     requestAnimationFrame(draw);
 }
 
 function drawInit() {
     drawText("GRAND MASTER", vw/2, vh/2 - 30, 55, "#FFD700", true);
-    drawText("ALCHEMIST", vw/2, vh/2 + 25, 35, "#D4AF37", true);
+    drawText("SPEEDRUN", vw/2, vh/2 + 25, 35, "#D4AF37", true);
     drawText("點擊喚醒古代試煉", vw/2, vh/2 + 100, 18, "#88a");
 }
 
-function drawLobby() { drawText("聖域：大師記憶", vw/2, vh * 0.25, 50, "#FFD700", true); }
+function drawLobby() { drawText("聖域：記憶大師", vw/2, vh * 0.25, 50, "#FFD700", true); }
 function drawSettings() { drawText("試煉配置總機", vw/2, 60, 36, "#FFD700", true); }
 
 function drawCharSelect() {
-    drawText(`集結英雄 (最多4人)`, vw/2, 70, 28, "#FFD700");
+    drawText(`集結英雄 (單人競速 / 多人搶分)`, vw/2, 70, 28, "#FFD700");
     const gridW = 90, gridH = 120, spX = 100, spY = 140;
     const startX = vw/2 - (4 * spX - 10) / 2, startY = vh * 0.3;
 
@@ -472,25 +460,22 @@ function drawGame() {
             ctx.fillStyle = "#FFD700"; ctx.fillRect(0, py - 10, 5, blockH - 10);
         }
 
-        drawText(c.icon, sidebarW / 2, py + 25, isMobile ? 35 : 50, "#FFF");
-        
-        let scoreTxt = "";
-        if (settings.modeIdx === 0) scoreTxt = Math.floor(p.score);
-        else if (settings.modeIdx === 1) scoreTxt = `通關: ${totalBoardsCleared}`;
-        else scoreTxt = p.score.toFixed(1) + "s";
-
-        if (!isMobile) {
-            drawText(c.name, sidebarW / 2, py + 55, 16, c.color);
-            drawText(scoreTxt, sidebarW / 2, py + 85, 24, "#FFF", true);
-        } else { drawText(scoreTxt, sidebarW / 2, py + 65, 18, "#FFF", true); }
+        if (players.length === 1) {
+            drawText(c.icon, sidebarW / 2, py + 35, isMobile ? 40 : 60, "#FFF");
+            if (!isMobile) drawText(c.name, sidebarW / 2, py + 80, 18, c.color);
+        } else {
+            drawText(c.icon, sidebarW / 2, py + 25, isMobile ? 35 : 50, "#FFF");
+            let scoreTxt = `${p.score} 勝`;
+            if (!isMobile) {
+                drawText(c.name, sidebarW / 2, py + 55, 16, c.color);
+                drawText(scoreTxt, sidebarW / 2, py + 85, 24, "#FFF", true);
+            } else { drawText(scoreTxt, sidebarW / 2, py + 65, 18, "#FFF", true); }
+        }
     });
 
     const cx = sidebarW + (vw - sidebarW) / 2;
-    let roundTxt = settings.modeIdx === 1 ? `無限生存模式` : `ROUND ${currentRound} / ${settings.modeIdx===2?5:settings.rounds}`;
-    let timeCol = (settings.modeIdx === 1 && timer < 10) ? "#f44" : "#FFF";
-    
-    drawText(roundTxt, cx, 50, 24, "#FFD700", true);
-    drawText(formatTime(timer), cx, 90, 26, timeCol);
+    drawText(`ROUND ${currentRound} / ${TOTAL_ROUNDS}`, cx, 50, 24, "#FFD700", true);
+    drawText(formatTime(timer), cx, 90, 26, "#FFF");
 
     cards.forEach(c => {
         ctx.save(); ctx.translate(c.x + c.w/2, c.y + c.h/2);
@@ -503,7 +488,7 @@ function drawGame() {
         ctx.strokeStyle = c.isSolved ? "#FFF" : "rgba(212,175,55,0.3)";
         roundRect(-c.w/2, -c.h/2, c.w, c.h, 15, true, true);
         
-        // 卡片數字絕對置中 (x: 0, y: 0)
+        // 數字絕對置中
         if (c.isFlipped || c.isSolved) drawText(c.id, 0, 0, c.w * 0.45, "#111");
         ctx.restore();
     });
@@ -511,48 +496,50 @@ function drawGame() {
 
 function drawGameOver() {
     drawText("試煉終焉", vw/2, 80, 50, "#FFD700", true);
-    let sorted = [...players];
-    if (settings.modeIdx === 2) sorted.sort((a,b) => a.score - b.score); else sorted.sort((a,b) => b.score - a.score);
-
-    sorted.forEach((p, i) => {
-        const c = CHARS[p.charIdx];
-        let val = settings.modeIdx === 0 ? Math.floor(p.score) + " pts" : 
-                  settings.modeIdx === 1 ? `通關 ${totalBoardsCleared} 題` : p.score.toFixed(2) + " 秒";
-        drawText(`${i+1}. ${c.icon} ${c.name} - ${val}`, vw/2, 180 + i * 50, 24, c.color);
-    });
+    if (players.length > 1) {
+        let sorted = [...players].sort((a,b) => b.score - a.score);
+        sorted.forEach((p, i) => {
+            const c = CHARS[p.charIdx];
+            drawText(`${i+1}. ${c.icon} ${c.name} - 贏得 ${p.score} 題`, vw/2, 180 + i * 50, 26, c.color);
+        });
+    } else {
+        drawText(`總耗時: ${formatTime(timer)}`, vw/2, 200, 32, "#FFF", true);
+    }
 }
 
 function drawEnterName() {
     drawText("締造傳奇", vw/2, 100, 45, "#FFD700", true);
     drawText("請輸入大名以鐫刻於聖域之柱", vw/2, 150, 18, "#aaa");
+    drawText(`成績: ${formatTime(timer)}`, vw/2, 185, 22, "#FFD700");
     
     ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.strokeStyle = "#D4AF37";
-    roundRect(vw/2 - 200, 200, 400, 60, 10, true, true);
-    // 絕對置中在框內 (框的 Y 是 200，高度 60 -> 中間是 230)
-    drawText(inputName + (Math.floor(Date.now()/500)%2===0 ? "_" : ""), vw/2, 230, 32, "#FFF");
+    roundRect(vw/2 - 200, 220, 400, 60, 10, true, true);
+    drawText(inputName + (Math.floor(Date.now()/500)%2===0 ? "_" : ""), vw/2, 250, 32, "#FFF");
 }
 
 function drawLeaderboard() {
-    drawText("聖域英雄榜", vw/2, 70, 45, "#FFD700", true);
+    drawText("聖域英雄榜 (單人競速)", vw/2, 70, 40, "#FFD700", true);
     if (leaderboard.length === 0) { drawText("尚無傳奇誕生", vw/2, 200, 24, "#666"); } 
     else {
         leaderboard.forEach((l, i) => {
             const y = 150 + i * 40;
-            let val = l.mode === MODES[2] ? parseFloat(l.score).toFixed(2)+"s" : l.score;
-            // 使用新增的 align 參數確保左右排版正確
-            drawText(`${i+1}. ${l.icon} ${l.name}`, vw/2 - 250, y, 22, "#FFF", false, 'left');
-            drawText(`[${l.mode}]`, vw/2 + 50, y, 16, "#888", false, 'center');
-            drawText(val, vw/2 + 250, y, 22, "#FFD700", false, 'right');
+            drawText(`${i+1}. ${l.icon} ${l.name}`, vw/2 - 150, y, 22, "#FFF", false, 'left');
+            drawText(formatTime(l.time), vw/2 + 150, y, 22, "#FFD700", false, 'right');
         });
     }
 }
 
-function formatTime(s) { let m = Math.floor(s / 60); let sec = (s % 60).toFixed(1); return `${m}:${sec.padStart(4, '0')}`; }
+// 格式化時間 (MM:SS.ms)
+function formatTime(s) { 
+    let m = Math.floor(s / 60); 
+    let sec = (s % 60).toFixed(2); 
+    return m > 0 ? `${m}:${sec.padStart(5, '0')}` : `${sec}s`; 
+}
 
-// 核心更新：加入 'align' 參數，並將基準線統一設為絕對垂直置中 ('middle')
+// 文字渲染核心 (絕對置中)
 function drawText(txt, x, y, size, col, glow = false, align = 'center') {
     ctx.textAlign = align;
-    ctx.textBaseline = 'middle'; // 絕對垂直置中
+    ctx.textBaseline = 'middle'; 
     ctx.fillStyle = col; 
     if (glow) { ctx.shadowBlur = 15; ctx.shadowColor = col; } else { ctx.shadowBlur = 0; }
     ctx.font = `bold ${size}px 'Cinzel', 'Noto Serif TC', serif`;
@@ -571,12 +558,10 @@ function drawButtons() {
         } else if (b.type === 'key') {
             ctx.fillStyle = "rgba(40,40,50,0.8)"; ctx.strokeStyle = "#555";
             roundRect(b.x, b.y, b.w, b.h, 8, true, true);
-            // 完美置中：X 和 Y 都指向按鈕中心點
             drawText(b.txt, b.x + b.w/2, b.y + b.h/2, b.txt.length > 1 ? 14 : 20, "#FFF");
         } else {
             ctx.fillStyle = "rgba(30, 30, 40, 0.7)"; ctx.strokeStyle = "rgba(212, 175, 55, 0.6)";
             roundRect(b.x, b.y, b.w, b.h, 12, true, true);
-            // 完美置中：X 和 Y 都指向按鈕中心點
             drawText(b.txt, b.x + b.w/2, b.y + b.h/2, 20, "#e8d08b");
         }
     });
