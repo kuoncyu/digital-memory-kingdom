@@ -6,12 +6,13 @@
     <title>Royal Memory: Speedrun Master</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Noto+Serif+TC:wght@400;700&display=swap');
-        body, html { 
-            margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; 
-            background-color: #020205; font-family: 'Cinzel', 'Noto Serif TC', serif; 
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+            background: radial-gradient(ellipse at center, #101018 0%, #020205 75%);
+            font-family: 'Cinzel', 'Noto Serif TC', serif;
             user-select: none; -webkit-user-select: none;
         }
-        canvas { display: block; touch-action: none; }
+        canvas { display: block; touch-action: none; cursor: pointer; }
     </style>
 </head>
 <body>
@@ -21,6 +22,9 @@
 /**
  * ROYAL MEMORY: SPEEDRUN MASTER
  * 核心更新：單人10題計時榜、多人無提示不洗牌/有提示洗牌制、極致對齊
+ * 美化更新：星空/暈影背景、按鈕漸層與懸停光暈、卡牌彈跳動畫
+ * 角色更新：DiceBear voxel-art 立體像素頭像
+ * 音樂更新：大廳音樂 lobby.mp3 / 遊戲內音樂 game.mp3
  */
 
 const canvas = document.getElementById('gameCanvas');
@@ -28,10 +32,14 @@ const ctx = canvas.getContext('2d');
 
 const STATE = { INIT: 0, LOBBY: 1, SETTINGS: 2, CHAR_SELECT: 3, PLAYING: 4, GAME_OVER: 5, ENTER_NAME: 6, LEADERBOARD: 7 };
 const CHARS = [
-    { name: "亞瑟國王", icon: "👑", color: "#FFD700" }, { name: "伊莎皇后", icon: "👸", color: "#FF69B4" },
-    { name: "蘭斯騎士", icon: "🛡️", color: "#4facfe" }, { name: "葛溫公主", icon: "✨", color: "#ee9ca7" },
-    { name: "路易親王", icon: "🦅", color: "#bdc3c7" }, { name: "艾琳女爵", icon: "🌿", color: "#00b09b" },
-    { name: "凱恩大公", icon: "⚒️", color: "#8e44ad" }, { name: "索菲賢者", icon: "📜", color: "#f39c12" }
+    { name: "Alex",   seed: "Alex-01",   color: "#FFD700", gender: 'M', top: "short",      beard: true  },
+    { name: "Jordan", seed: "Jordan-02", color: "#FF69B4", gender: 'F', top: "longWavy",    beard: false },
+    { name: "Taylor", seed: "Taylor-03", color: "#4facfe", gender: 'M', top: "mohawk",      beard: true  },
+    { name: "Morgan", seed: "Morgan-04", color: "#ee9ca7", gender: 'F', top: "braids",      beard: false },
+    { name: "Casey",  seed: "Casey-05",  color: "#bdc3c7", gender: 'M', top: "cap",         beard: true  },
+    { name: "Riley",  seed: "Riley-06",  color: "#00b09b", gender: 'F', top: "ponytail",    beard: false },
+    { name: "Avery",  seed: "Avery-07",  color: "#8e44ad", gender: 'M', top: "spiky",       beard: true  },
+    { name: "Quinn",  seed: "Quinn-08",  color: "#f39c12", gender: 'F', top: "buns",        beard: false }
 ];
 
 const TOTAL_ROUNDS = 10; // 固定 10 題
@@ -40,6 +48,8 @@ let state = STATE.INIT;
 let vw = window.innerWidth, vh = window.innerHeight;
 let buttons = [], particles = [], cards = [];
 let shake = 0, lockInput = false;
+let mouseX = -1, mouseY = -1;
+let frameTime = 0;
 
 // 遊戲設定
 let settings = { volM: 0.25, volS: 0.5, isDragM: false, isDragS: false, hintTime: 0 };
@@ -48,79 +58,79 @@ let nextTarget = 1, timer = 0, steps = 0;
 let leaderboard = [];
 let inputName = "";
 
-// --- 空靈水晶音效引擎 ---
-let audioCtx, musicGain, sfxGain;
-let bgmNodes = [];
-let bgmInterval = null;
-let currentMusicType = '';
+// --- 角色頭像 (DiceBear Voxel Art) ---
+const avatarCache = {};
+function avatarURL(c) {
+    const params = new URLSearchParams({
+        seed: c.seed,
+        backgroundColor: c.color.replace('#',''),
+        backgroundType: 'gradientLinear',
+        size: 128,
+        topVariant: c.top,
+        topProbability: 100,
+        beardProbability: c.beard ? 100 : 0,
+        glassesProbability: 0
+    });
+    return `https://api.dicebear.com/10.x/voxel-art/svg?${params.toString()}`;
+}
+function preloadAvatars() {
+    CHARS.forEach((c, i) => {
+        const img = new Image();
+        img.src = avatarURL(c);
+        avatarCache[i] = img;
+    });
+}
+
+function drawAvatar(idx, cx, cy, size, glow = false) {
+    const c = CHARS[idx]; const img = avatarCache[idx];
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, size / 2, 0, Math.PI * 2); ctx.closePath();
+    ctx.fillStyle = "rgba(255,255,255,0.05)"; ctx.fill();
+    if (glow) { ctx.shadowBlur = 22; ctx.shadowColor = c.color; }
+    ctx.lineWidth = glow ? 3.5 : 2; ctx.strokeStyle = glow ? c.color : "rgba(212,175,55,0.5)"; ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.clip();
+    if (img && img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+    }
+    ctx.restore();
+}
+
+// --- 音效與音樂引擎 ---
+let audioCtx, sfxGain;
+const bgmLobby = new Audio('lobby.mp3');
+const bgmGame = new Audio('game.mp3');
+bgmLobby.loop = true; bgmGame.loop = true;
+let currentBGM = null;
 
 function initAudio() {
     if (audioCtx) return;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    musicGain = audioCtx.createGain(); sfxGain = audioCtx.createGain();
-    musicGain.gain.value = settings.volM; sfxGain.gain.value = settings.volS;
-    musicGain.connect(audioCtx.destination); sfxGain.connect(audioCtx.destination);
+    sfxGain = audioCtx.createGain();
+    sfxGain.gain.value = settings.volS;
+    sfxGain.connect(audioCtx.destination);
+    updateAudioVols();
     playMusic('LOBBY');
 }
 
 function updateAudioVols() {
-    if (musicGain) musicGain.gain.setTargetAtTime(settings.volM, audioCtx.currentTime, 0.1);
-    if (sfxGain) sfxGain.gain.setTargetAtTime(settings.volS, audioCtx.currentTime, 0.1);
+    bgmLobby.volume = settings.volM; bgmGame.volume = settings.volM;
+    if (sfxGain && audioCtx) sfxGain.gain.setTargetAtTime(settings.volS, audioCtx.currentTime, 0.1);
 }
 
 function stopMusic() {
-    if (bgmInterval) clearInterval(bgmInterval);
-    const now = audioCtx ? audioCtx.currentTime : 0;
-    bgmNodes.forEach(node => {
-        try {
-            node.gain.gain.cancelScheduledValues(now);
-            node.gain.gain.linearRampToValueAtTime(0, now + 1);
-            node.osc.stop(now + 1.1);
-            if (node.lfo) node.lfo.stop(now + 1.1);
-        } catch(e) {}
-    });
-    bgmNodes = []; currentMusicType = '';
+    [bgmLobby, bgmGame].forEach(a => { a.pause(); });
+    currentBGM = null;
 }
 
 function playMusic(type) {
-    if (!audioCtx || currentMusicType === type) return;
-    stopMusic(); currentMusicType = type;
-    const now = audioCtx.currentTime;
-
-    if (type === 'LOBBY') {
-        const freqs = [130.81, 196.00, 246.94, 293.66, 329.63]; 
-        freqs.forEach((f, i) => {
-            const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
-            const lfo = audioCtx.createOscillator(); const lfoGain = audioCtx.createGain();
-            
-            osc.type = i % 2 === 0 ? 'sine' : 'triangle'; osc.frequency.value = f + (Math.random()*0.6 - 0.3);
-            lfo.type = 'sine'; lfo.frequency.value = 0.05 + i * 0.01; lfoGain.gain.value = 0.04;
-            lfo.connect(lfoGain); lfoGain.connect(gain.gain); lfo.start(now);
-            gain.gain.setValueAtTime(0, now); gain.gain.linearRampToValueAtTime(0.06, now + 3);
-            
-            osc.connect(gain); gain.connect(musicGain); osc.start(now);
-            bgmNodes.push({ osc: osc, gain: gain, lfo: lfo });
-        });
-    } else if (type === 'GAME') {
-        const scale = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25]; 
-        bgmInterval = setInterval(() => {
-            if(!audioCtx || state !== STATE.PLAYING) return;
-            const t = audioCtx.currentTime;
-            
-            const kick = audioCtx.createOscillator(); const kickGain = audioCtx.createGain();
-            kick.type = 'sine'; kick.frequency.setValueAtTime(80, t); kick.frequency.exponentialRampToValueAtTime(20, t + 0.4);
-            kickGain.gain.setValueAtTime(0.3, t); kickGain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
-            kick.connect(kickGain); kickGain.connect(musicGain); kick.start(t); kick.stop(t + 0.5);
-
-            if (Math.random() > 0.4) {
-                const pluck = audioCtx.createOscillator(); const pluckGain = audioCtx.createGain();
-                pluck.type = 'sine'; pluck.frequency.value = scale[Math.floor(Math.random() * scale.length)];
-                pluckGain.gain.setValueAtTime(0, t); pluckGain.gain.linearRampToValueAtTime(0.15, t + 0.02); 
-                pluckGain.gain.exponentialRampToValueAtTime(0.001, t + 2.0); 
-                pluck.connect(pluckGain); pluckGain.connect(musicGain); pluck.start(t); pluck.stop(t + 2.1);
-            }
-        }, 1000);
-    }
+    const target = type === 'LOBBY' ? bgmLobby : bgmGame;
+    if (currentBGM === target) return;
+    stopMusic();
+    target.currentTime = 0;
+    target.volume = settings.volM;
+    target.play().catch(() => {});
+    currentBGM = target;
 }
 
 function playSFX(type) {
@@ -144,7 +154,35 @@ function playSFX(type) {
 }
 
 // --- 核心佈局與 UI ---
-function resize() { vw = canvas.width = window.innerWidth; vh = canvas.height = window.innerHeight; updateUI(); }
+function resize() { vw = canvas.width = window.innerWidth; vh = canvas.height = window.innerHeight; genStars(); updateUI(); }
+
+// --- 星空背景 ---
+let stars = [];
+function genStars() {
+    stars = Array.from({ length: 140 }, () => ({
+        x: Math.random() * vw, y: Math.random() * vh,
+        r: Math.random() * 1.4 + 0.3,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.6 + Math.random() * 1.4
+    }));
+}
+
+function drawBackground() {
+    const grad = ctx.createRadialGradient(vw / 2, vh / 2, 0, vw / 2, vh / 2, Math.max(vw, vh) * 0.75);
+    grad.addColorStop(0, "#12121e"); grad.addColorStop(0.6, "#08080c"); grad.addColorStop(1, "#020205");
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, vw, vh);
+
+    stars.forEach(s => {
+        const a = 0.25 + 0.6 * Math.abs(Math.sin(frameTime * 0.001 * s.speed + s.phase));
+        ctx.globalAlpha = a; ctx.fillStyle = "#e8d08b";
+        ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    // 邊框裝飾
+    ctx.strokeStyle = "rgba(212,175,55,0.35)"; ctx.lineWidth = 2;
+    ctx.strokeRect(14, 14, vw - 28, vh - 28);
+}
 
 function updateUI() {
     buttons = [];
@@ -220,7 +258,7 @@ function handleKey(k) {
 
 function saveScore() {
     const p = players[0]; 
-    leaderboard.push({ name: inputName, time: timer, icon: CHARS[p.charIdx].icon });
+    leaderboard.push({ name: inputName, time: timer, charIdx: p.charIdx });
     // 排行榜：單人時間越短排名越高 (升序排列)
     leaderboard.sort((a, b) => a.time - b.time);
     if (leaderboard.length > 10) leaderboard.length = 10; 
@@ -247,7 +285,7 @@ function initRound() {
     state = STATE.PLAYING; nextTarget = 1; steps = 0; lockInput = false;
 
     let nums = [1,2,3,4,5,6,7,8,9].sort(() => Math.random() - 0.5);
-    cards = nums.map(n => ({ id: n, isFlipped: false, isSolved: false, x:0, y:0, w:0, h:0 }));
+    cards = nums.map(n => ({ id: n, isFlipped: false, isSolved: false, x:0, y:0, w:0, h:0, pop: 1 }));
     recalcCards(); updateUI(); 
 
     if (settings.hintTime > 0) showHint();
@@ -331,7 +369,7 @@ function handleInput(x, y, isDown, isMove = false) {
 }
 
 function onCardClick(c) {
-    steps++; c.isFlipped = true;
+    steps++; c.isFlipped = true; c.pop = 1.35;
     if (c.id === nextTarget) {
         c.isSolved = true; nextTarget++; playSFX('CORRECT');
         spawnParticles(c.x + c.w/2, c.y + c.h/2, "#FFD700");
@@ -387,8 +425,9 @@ function gameOver() {
 }
 
 // --- 渲染系統 ---
-function draw() {
-    ctx.fillStyle = "#020205"; ctx.fillRect(0, 0, vw, vh);
+function draw(ts) {
+    frameTime = ts || 0;
+    drawBackground();
 
     if (shake > 0) { ctx.save(); ctx.translate(Math.random()*shake - shake/2, Math.random()*shake - shake/2); shake *= 0.85; }
 
@@ -411,7 +450,10 @@ function draw() {
 }
 
 function drawInit() {
+    const pulse = 0.85 + 0.15 * Math.sin(frameTime * 0.003);
+    ctx.save(); ctx.globalAlpha = pulse;
     drawText("GRAND MASTER", vw/2, vh/2 - 30, 55, "#FFD700", true);
+    ctx.restore();
     drawText("SPEEDRUN", vw/2, vh/2 + 25, 35, "#D4AF37", true);
     drawText("點擊喚醒古代試煉", vw/2, vh/2 + 100, 18, "#88a");
 }
@@ -430,8 +472,8 @@ function drawCharSelect() {
         ctx.fillStyle = pNum ? "rgba(255,215,0,0.15)" : "rgba(255,255,255,0.02)";
         ctx.strokeStyle = pNum ? c.color : "rgba(255,255,255,0.08)";
         roundRect(bx, by, gridW, gridH, 10, true, true);
-        drawText(c.icon, bx + gridW/2, by + gridH * 0.45, 40, "#FFF");
-        drawText(c.name, bx + gridW/2, by + gridH * 0.8, 14, pNum ? c.color : "#666");
+        drawAvatar(i, bx + gridW/2, by + gridH * 0.4, 54, !!pNum);
+        drawText(c.name, bx + gridW/2, by + gridH * 0.85, 14, pNum ? c.color : "#666");
         if (pNum) {
             ctx.fillStyle = "#FF4500"; ctx.beginPath(); ctx.arc(bx + gridW, by, 12, 0, Math.PI*2); ctx.fill();
             drawText("P"+pNum, bx + gridW, by + 5, 12, "#FFF");
@@ -444,7 +486,9 @@ function drawGame() {
     const sidebarW = isMobile ? 100 : 220;
 
     // 左側面板
-    ctx.fillStyle = "rgba(10, 10, 15, 0.95)"; ctx.fillRect(0, 0, sidebarW, vh);
+    const panelGrad = ctx.createLinearGradient(0, 0, sidebarW, 0);
+    panelGrad.addColorStop(0, "rgba(14,14,20,0.97)"); panelGrad.addColorStop(1, "rgba(10,10,15,0.85)");
+    ctx.fillStyle = panelGrad; ctx.fillRect(0, 0, sidebarW, vh);
     ctx.strokeStyle = "rgba(212, 175, 55, 0.4)"; ctx.beginPath(); ctx.moveTo(sidebarW, 0); ctx.lineTo(sidebarW, vh); ctx.stroke();
 
     const blockH = isMobile ? 100 : 130;
@@ -461,14 +505,14 @@ function drawGame() {
         }
 
         if (players.length === 1) {
-            drawText(c.icon, sidebarW / 2, py + 35, isMobile ? 40 : 60, "#FFF");
-            if (!isMobile) drawText(c.name, sidebarW / 2, py + 80, 18, c.color);
+            drawAvatar(p.charIdx, sidebarW / 2, py + (isMobile ? 30 : 40), isMobile ? 55 : 75, isActive);
+            if (!isMobile) drawText(c.name, sidebarW / 2, py + 90, 18, c.color);
         } else {
-            drawText(c.icon, sidebarW / 2, py + 25, isMobile ? 35 : 50, "#FFF");
+            drawAvatar(p.charIdx, sidebarW / 2, py + (isMobile ? 22 : 32), isMobile ? 44 : 60, isActive);
             let scoreTxt = `${p.score} 勝`;
             if (!isMobile) {
-                drawText(c.name, sidebarW / 2, py + 55, 16, c.color);
-                drawText(scoreTxt, sidebarW / 2, py + 85, 24, "#FFF", true);
+                drawText(c.name, sidebarW / 2, py + 62, 16, c.color);
+                drawText(scoreTxt, sidebarW / 2, py + 90, 24, "#FFF", true);
             } else { drawText(scoreTxt, sidebarW / 2, py + 65, 18, "#FFF", true); }
         }
     });
@@ -478,14 +522,16 @@ function drawGame() {
     drawText(formatTime(timer), cx, 90, 26, "#FFF");
 
     cards.forEach(c => {
-        ctx.save(); ctx.translate(c.x + c.w/2, c.y + c.h/2);
+        c.pop += (1 - c.pop) * 0.22;
+        ctx.save(); ctx.translate(c.x + c.w/2, c.y + c.h/2); ctx.scale(c.pop, c.pop);
         const grad = ctx.createLinearGradient(-c.w/2, -c.h/2, c.w/2, c.h/2);
         if (c.isFlipped || c.isSolved) { grad.addColorStop(0, "#fffaf0"); grad.addColorStop(1, "#d4af37"); } 
-        else { grad.addColorStop(0, "#1a1a2e"); grad.addColorStop(1, "#0d0d1a"); }
+        else { grad.addColorStop(0, "#22223a"); grad.addColorStop(1, "#0d0d1a"); }
         
         ctx.fillStyle = grad;
-        if (c.isSolved) { ctx.shadowBlur = 20; ctx.shadowColor = "#FFD700"; }
-        ctx.strokeStyle = c.isSolved ? "#FFF" : "rgba(212,175,55,0.3)";
+        if (c.isSolved) { ctx.shadowBlur = 24; ctx.shadowColor = "#FFD700"; }
+        ctx.strokeStyle = c.isSolved ? "#FFF" : "rgba(212,175,55,0.35)";
+        ctx.lineWidth = 2;
         roundRect(-c.w/2, -c.h/2, c.w, c.h, 15, true, true);
         
         // 數字絕對置中
@@ -498,9 +544,12 @@ function drawGameOver() {
     drawText("試煉終焉", vw/2, 80, 50, "#FFD700", true);
     if (players.length > 1) {
         let sorted = [...players].sort((a,b) => b.score - a.score);
+        const rowW = 360, startX = vw/2 - rowW/2;
         sorted.forEach((p, i) => {
             const c = CHARS[p.charIdx];
-            drawText(`${i+1}. ${c.icon} ${c.name} - 贏得 ${p.score} 題`, vw/2, 180 + i * 50, 26, c.color);
+            const y = 180 + i * 55;
+            drawAvatar(p.charIdx, startX + 22, y, 40, i === 0);
+            drawText(`${i+1}. ${c.name} - 贏得 ${p.score} 題`, startX + 55, y, 24, c.color, false, 'left');
         });
     } else {
         drawText(`總耗時: ${formatTime(timer)}`, vw/2, 200, 32, "#FFF", true);
@@ -522,8 +571,9 @@ function drawLeaderboard() {
     if (leaderboard.length === 0) { drawText("尚無傳奇誕生", vw/2, 200, 24, "#666"); } 
     else {
         leaderboard.forEach((l, i) => {
-            const y = 150 + i * 40;
-            drawText(`${i+1}. ${l.icon} ${l.name}`, vw/2 - 150, y, 22, "#FFF", false, 'left');
+            const y = 150 + i * 42;
+            drawAvatar(l.charIdx, vw/2 - 175, y, 30, i === 0);
+            drawText(`${i+1}. ${l.name}`, vw/2 - 145, y, 22, "#FFF", false, 'left');
             drawText(formatTime(l.time), vw/2 + 150, y, 22, "#FFD700", false, 'right');
         });
     }
@@ -551,21 +601,37 @@ function drawButtons() {
     buttons.forEach(b => {
         if (b.type === 'sliderM' || b.type === 'sliderS') {
             const barH = 12, fillW = (b.type==='sliderM'?settings.volM:settings.volS) * b.w;
-            ctx.fillStyle = "#222"; roundRect(b.x, b.y, b.w, barH, 6, true, false);
-            ctx.fillStyle = "#d4af37"; roundRect(b.x, b.y, fillW, barH, 6, true, false);
+            ctx.fillStyle = "#1a1a1a"; roundRect(b.x, b.y, b.w, barH, 6, true, false);
+            const sg = ctx.createLinearGradient(b.x, 0, b.x + b.w, 0);
+            sg.addColorStop(0, "#8a6d1f"); sg.addColorStop(1, "#f5d97a");
+            ctx.fillStyle = sg; roundRect(b.x, b.y, fillW, barH, 6, true, false);
+            ctx.shadowBlur = 10; ctx.shadowColor = "#FFD700";
             ctx.fillStyle = "#FFF"; ctx.beginPath(); ctx.arc(b.x + fillW, b.y + barH/2, 12, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
             drawText(`${b.txt}: ${Math.round((b.type==='sliderM'?settings.volM:settings.volS)*100)}%`, b.x + b.w/2, b.y - 15, 16, "#aaa");
         } else if (b.type === 'key') {
-            ctx.fillStyle = "rgba(40,40,50,0.8)"; ctx.strokeStyle = "#555";
+            const hover = isHover(b);
+            ctx.fillStyle = hover ? "rgba(70,60,30,0.9)" : "rgba(40,40,50,0.8)";
+            ctx.strokeStyle = hover ? "#FFD700" : "#555";
             roundRect(b.x, b.y, b.w, b.h, 8, true, true);
             drawText(b.txt, b.x + b.w/2, b.y + b.h/2, b.txt.length > 1 ? 14 : 20, "#FFF");
         } else {
-            ctx.fillStyle = "rgba(30, 30, 40, 0.7)"; ctx.strokeStyle = "rgba(212, 175, 55, 0.6)";
+            const hover = isHover(b);
+            const grad = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
+            if (hover) { grad.addColorStop(0, "rgba(80,64,20,0.9)"); grad.addColorStop(1, "rgba(50,40,15,0.9)"); }
+            else { grad.addColorStop(0, "rgba(40,40,52,0.75)"); grad.addColorStop(1, "rgba(24,24,32,0.75)"); }
+            ctx.fillStyle = grad;
+            if (hover) { ctx.shadowBlur = 18; ctx.shadowColor = "#D4AF37"; }
+            ctx.strokeStyle = hover ? "#FFD700" : "rgba(212, 175, 55, 0.6)";
+            ctx.lineWidth = hover ? 2 : 1.4;
             roundRect(b.x, b.y, b.w, b.h, 12, true, true);
-            drawText(b.txt, b.x + b.w/2, b.y + b.h/2, 20, "#e8d08b");
+            ctx.shadowBlur = 0;
+            drawText(b.txt, b.x + b.w/2, b.y + b.h/2, 20, hover ? "#FFE9A8" : "#e8d08b");
         }
     });
 }
+
+function isHover(b) { return mouseX > b.x && mouseX < b.x + b.w && mouseY > b.y && mouseY < b.y + b.h; }
 
 function roundRect(x, y, w, h, r, fill, stroke) {
     ctx.beginPath(); ctx.moveTo(x+r, y); ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
@@ -591,15 +657,19 @@ const handleEvent = (e, isDown, isMove) => {
     const rect = canvas.getBoundingClientRect();
     const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
     const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+    mouseX = x; mouseY = y;
     handleInput(x, y, isDown, isMove);
 };
 canvas.addEventListener('mousedown', e => handleEvent(e, true, false));
 canvas.addEventListener('mousemove', e => handleEvent(e, false, true));
 canvas.addEventListener('mouseup', () => handleInput(0, 0, false, false));
+canvas.addEventListener('mouseleave', () => { mouseX = -1; mouseY = -1; });
 canvas.addEventListener('touchstart', e => { e.preventDefault(); handleEvent(e, true, false); }, {passive: false});
 canvas.addEventListener('touchmove', e => { e.preventDefault(); handleEvent(e, false, true); }, {passive: false});
 canvas.addEventListener('touchend', () => handleInput(0, 0, false, false));
-resize(); draw();
+
+preloadAvatars();
+resize(); requestAnimationFrame(draw);
 </script>
 </body>
 </html>
