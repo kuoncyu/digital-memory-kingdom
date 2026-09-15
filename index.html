@@ -278,6 +278,9 @@ function startGame() {
     playSFX('CLICK');
     currentPlayerIdx = 0; currentRound = 1; timer = 0;
     players.forEach(p => { p.score = 0; }); // 多人競賽的 score 紀錄勝出題數
+    if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+    }
     playMusic('GAME'); initRound();
 }
 
@@ -491,7 +494,7 @@ function drawGame() {
     ctx.fillStyle = panelGrad; ctx.fillRect(0, 0, sidebarW, vh);
     ctx.strokeStyle = "rgba(212, 175, 55, 0.4)"; ctx.beginPath(); ctx.moveTo(sidebarW, 0); ctx.lineTo(sidebarW, vh); ctx.stroke();
 
-    const blockH = isMobile ? 100 : 130;
+    const blockH = isMobile ? 130 : 175;
     const startY = Math.max(50, (vh - (players.length * blockH)) / 2);
 
     players.forEach((p, i) => {
@@ -500,20 +503,24 @@ function drawGame() {
         const py = startY + i * blockH;
 
         if (isActive) {
-            ctx.fillStyle = "rgba(255, 215, 0, 0.2)"; ctx.fillRect(0, py - 10, sidebarW, blockH - 10);
-            ctx.fillStyle = "#FFD700"; ctx.fillRect(0, py - 10, 5, blockH - 10);
+            ctx.fillStyle = "rgba(255, 215, 0, 0.2)"; ctx.fillRect(0, py - 10, sidebarW, blockH - 15);
+            ctx.fillStyle = "#FFD700"; ctx.fillRect(0, py - 10, 5, blockH - 15);
         }
 
         if (players.length === 1) {
-            drawAvatar(p.charIdx, sidebarW / 2, py + (isMobile ? 30 : 40), isMobile ? 55 : 75, isActive);
-            if (!isMobile) drawText(c.name, sidebarW / 2, py + 90, 18, c.color);
+            const avSize = isMobile ? 55 : 80;
+            const avCenterY = py + 16 + avSize / 2;
+            drawAvatar(p.charIdx, sidebarW / 2, avCenterY, avSize, isActive);
+            if (!isMobile) drawText(c.name, sidebarW / 2, avCenterY + avSize / 2 + 24, 18, c.color);
         } else {
-            drawAvatar(p.charIdx, sidebarW / 2, py + (isMobile ? 22 : 32), isMobile ? 44 : 60, isActive);
+            const avSize = isMobile ? 46 : 66;
+            const avCenterY = py + 14 + avSize / 2;
+            drawAvatar(p.charIdx, sidebarW / 2, avCenterY, avSize, isActive);
             let scoreTxt = `${p.score} 勝`;
             if (!isMobile) {
-                drawText(c.name, sidebarW / 2, py + 62, 16, c.color);
-                drawText(scoreTxt, sidebarW / 2, py + 90, 24, "#FFF", true);
-            } else { drawText(scoreTxt, sidebarW / 2, py + 65, 18, "#FFF", true); }
+                drawText(c.name, sidebarW / 2, avCenterY + avSize / 2 + 20, 15, c.color);
+                drawText(scoreTxt, sidebarW / 2, avCenterY + avSize / 2 + 46, 22, "#FFF", true);
+            } else { drawText(scoreTxt, sidebarW / 2, avCenterY + avSize / 2 + 22, 17, "#FFF", true); }
         }
     });
 
@@ -653,6 +660,8 @@ function drawParticles() {
 }
 
 window.addEventListener('resize', resize);
+document.addEventListener('fullscreenchange', resize);
+document.addEventListener('orientationchange', resize);
 const handleEvent = (e, isDown, isMove) => {
     const rect = canvas.getBoundingClientRect();
     const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
